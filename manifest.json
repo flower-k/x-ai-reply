@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "X AI 评论助手 (BYOK)",
+  "version": "1.0",
+  "description": "提取X推文并调用自定义大模型API生成回复",
+  "host_permissions": [
+    "https://x.com/*",
+    "https://api.deepseek.com/*",
+    "https://api.moonshot.cn/*",
+    "https://api.moonshot.ai/*",
+    "https://api.kimi.com/*",
+    "https://open.bigmodel.cn/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

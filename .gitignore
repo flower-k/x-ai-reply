@@ -1,0 +1,8 @@
+# 本地密钥配置，不要提交
+config.js
+
+# 后台数据导出的分析表格
+account_analytics_*.csv
+
+# macOS
+.DS_Store
