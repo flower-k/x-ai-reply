@@ -626,6 +626,9 @@ function extractTweetMetrics(article) {
   };
 }
 
+// 热门帖曝光量上限：只抓取少于 10 万曝光（views < 100000）的潜力热门帖
+const MAX_HOT_VIEWS = 100000;
+
 // 多维度热门度评估算法（曝光 + 点赞 + 评论 + 转发 + 收藏 + 互动率 + 时间爆发力）
 function evaluateTweetHotness(metrics, preset = "balanced") {
   const { views, likes, replies, reposts, bookmarks, ageHours } = metrics;
@@ -640,9 +643,11 @@ function evaluateTweetHotness(metrics, preset = "balanced") {
   const freshnessMultiplier = ageHours !== null && ageHours <= 6 ? 1.4 : 1.0;
   const hotScore = Math.round(baseScore * freshnessMultiplier);
 
-  // 多维入选判定
+  // 多维入选判定（硬性条件：曝光量必须少于 10 万，过滤已经泛滥的百万级大V老帖）
   let isHot = false;
-  if (preset === "strict") {
+  if (views >= MAX_HOT_VIEWS) {
+    isHot = false;
+  } else if (preset === "strict") {
     isHot =
       (views >= 10000 && (likes >= 40 || replies >= 15)) ||
       likes >= 80 ||
@@ -651,7 +656,7 @@ function evaluateTweetHotness(metrics, preset = "balanced") {
   } else if (preset === "loose") {
     isHot = views >= 200 || likes >= 4 || replies >= 2 || bookmarks >= 3;
   } else {
-    // 默认 balanced（智能多维判定）：
+    // 默认 balanced（智能多维判定，且 views < 100000）：
     // 维度A: 曝光过千且赞/评达标
     // 维度B: 评论区讨论热烈（评论>=8）
     // 维度C: 高赞或高收藏干货（赞>=20 或 收藏>=10）
@@ -727,7 +732,7 @@ function scanVisibleTweets() {
     // 注入或更新每条推文底部的「🪄 仿写 / 🔥 爆款仿写」按钮
     injectOrUpdateRewriteBtnOnArticle(article, enrichedPost);
 
-    // 若满足多维热门标准，且正文字数 >= 10（过滤极短的无意义寒暄回复），加入热门池
+    // 若满足多维热门标准（含曝光 < 10万），且正文字数 >= 10，加入热门池
     const contentLength = (baseTweet.text || "").length + (baseTweet.quotedText || "").length;
     if (evaluation.isHot && contentLength >= 10) {
       const existing = hotPostsPool.get(tweetKey);
@@ -735,6 +740,9 @@ function scanVisibleTweets() {
         hotPostsPool.set(tweetKey, enrichedPost);
         poolUpdated = true;
       }
+    } else if (hotPostsPool.has(tweetKey)) {
+      hotPostsPool.delete(tweetKey);
+      poolUpdated = true;
     }
   });
 
