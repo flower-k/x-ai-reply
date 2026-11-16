@@ -31,39 +31,8 @@ const STYLE_PROMPTS = {
     "Write a short, natural, casual English reply (under 20 words) with authentic tech Twitter / indie hacker vibes. No corporate tone, no period at the end."
 };
 
-// 基于 @dukou_dk 账号真实爆款历史数据提炼的 4 种二创改写风格（字数严格跟随原文 ±10 字）
-const REWRITE_STYLE_PROMPTS = {
-  info_gap: `【模式：💰 搞钱信息差 / 野路子拆解风】
-参考语感：
-- “卧槽！！！\n小红书卖虚拟资料这么挣钱！！！\n有人卖拼豆图纸干了10W销售额！！！\n🥹🥹”
-- “发现一个野路子！！！\n先帮客户做自动获客，跑通才写代码，月入 $11,328。\n先卖出去再写代码！！！\n😉😉”
-改写要求：
-1. 必须严格遵守【字数硬性铁律】（控制在原文 ±10 字范围内）。
-2. 抓核心信息差/搞钱逻辑/数字，用大白话短句分行写，结尾加 😉😉 或 🥹🥹。`,
-
-  hot_take: `【模式：🔥 暴论 / 扎心认知风】
-参考语感：
-- “程序员创业最容易犯的错：\n先开发好产品，后找用户！！！\n先收钱比先写代码更重要！！！\n😉😉”
-- “做副业死得最快的方式，就是追求仪式感！！！\n真玩家都是先把第一笔钱收进微信钱包！！！\n🥺🥺”
-改写要求：
-1. 必须严格遵守【字数硬性铁律】（控制在原文 ±10 字范围内）。
-2. 亮出犀利观点或反差对比，刀刀见血，连用“！！！”，结尾加 😉😉 或 🥺🥺。`,
-
-  question_hook: `【模式：❓ 互动提问 / 痛点共鸣风】
-参考语感：
-- “大家都在搞什么副业？？？\n我要求不高\n一个月搞个8000就行！！！\n😉😉”
-- “不懂就问：\n为什么发个石头都能有这么大流量？？？\n🥹🥹”
-改写要求：
-1. 必须严格遵守【字数硬性铁律】（控制在原文 ±10 字范围内）。
-2. 转化为直白痛点提问或二选一，连用“？？？”或“！！！”，末尾带 😉😉 或 🥹🥹。`,
-
-  soft_promo: `【模式：📢 借势带货（植入 dukouai.top）】
-参考语感：
-- “赚钱不是很容易吗？\n做AI代理卖铲子就可以了！！！\n低价稳货源：dukouai.top\n😉😉”
-改写要求：
-1. 必须严格遵守【字数硬性铁律】（控制在原文 ±10 字范围内）。
-2. 顺着原帖点出痛点并自然带出“dukouai.top” + 😉😉。`
-};
+// 二创改写时，模型输出风格画像与正文之间的分隔符
+const STYLE_PROFILE_SEPARATOR = '<<<STYLE|TEXT>>>';
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "GENERATE_REPLY") {
@@ -74,7 +43,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === "REWRITE_POST") {
     rewritePost(request.payload)
-      .then((text) => sendResponse({ success: true, text }))
+      .then((result) => sendResponse({ success: true, ...result }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -170,28 +139,39 @@ async function generateReply(payload = {}) {
   return executeChatMessages(messages);
 }
 
-// 爆款推文 AI 二创改写（深度定制 @dukou_dk 账号风格，字数严格匹配原文 ±10 字）
+// 爆款推文 AI 二创改写：先拆解原帖创作风格，再用该风格仿写（不带任何预设账号腔）
 async function rewritePost(payload = {}) {
-  const { style = "info_gap", sourceTweet = {} } = payload;
-  const stylePrompt = REWRITE_STYLE_PROMPTS[style] || REWRITE_STYLE_PROMPTS.info_gap;
+  const { sourceTweet = {} } = payload;
 
-  // 计算原文有效字数（去除空白符后的字符数），设定 ±10 字的目标区间
-  const rawOriginal = (sourceTweet.text || sourceTweet.quotedText || "").replace(/\s+/g, "");
-  const origLen = rawOriginal.length > 0 ? rawOriginal.length : 20;
+  const originalBody = sourceTweet.text || sourceTweet.quotedText || "";
+  const origLen = originalBody.replace(/\s+/g, "").length || 20;
   const minLen = Math.max(5, origLen - 10);
   const maxLen = origLen + 10;
+  const origLines = (originalBody.match(/\S[^\n]*/g) || [""]).length;
 
   const systemPrompt = [
-    "你是 X (Twitter) 中文区高互动博主 @dukou_dk（渡口）。",
-    "请将用户抓到的热门推文进行【等长爆款二创改写】。",
-    `【字数硬性铁律（最高优先级）】：原帖字数为 ${origLen} 字，你改写后的文案总字数必须严格控制在 ${minLen} ~ ${maxLen} 个字之间（与原文字数上下浮动绝对不能超过 10 个字）！`,
-    "【排版与文风要求】：",
-    "1. 如果原帖只有一两句话（如 20 字左右），你也只写一两句短话（10~30 字），绝不扩写啰嗦！",
-    "2. 单句成行：每句话单独一行，善用“！！！”或“？？？”拉满情绪，结尾带 😉😉 或 🥹🥹。",
-    "3. 彻底去重：保留原帖核心意思与节奏，换用大白话重写，严禁照抄原句。",
-    "4. 直接输出改写后的推文正文，不要输出字数统计或任何解释说明。",
+    "你是文案仿写专家，擅长把一个陌生作者的写法拆到可复用的颗粒度，再用这套写法重写内容。",
+    "本次改写的定义是【换文笔，不换内容】：原帖写的事情必须原样保留，只是换成另一种写法来讲。",
     "",
-    stylePrompt
+    "【第一步：风格拆解】只分析原帖的写法（不是它讲了什么事），提炼创作风格，覆盖：",
+    "1. 语言（中/英/混用）与整体语气（亢奋、冷静、毒舌、自嘲、真诚…）。",
+    "2. 结构：共几行、每行大约几个字、是否单句成行、有没有列表或编号。",
+    "3. 标点习惯：感叹号问号是否连用、是否用省略号或空格断句、是否加引号或书名号。",
+    "4. 表情符号：用不用、具体哪些、放在句中还是收尾、是否成对重复。",
+    "5. 钩子结构：第一行靠什么抓注意力（抛结论、抛数字、抛问题、抛反差、自嘲起笔…）。",
+    "6. 人称视角：第一人称、第二人称还是无主语陈述，有没有称呼语。",
+    "7. 句式节奏：短促堆叠还是长句铺陈，有没有反复出现的口头禅或句型模板。",
+    "",
+    "【第二步：同风格仿写】按第一步的风格重写原帖，遵守以下硬性要求：",
+    "1. 题材锁死：原帖写什么就写什么。原帖讲约炮就还是讲约炮，讲失恋就还是讲失恋；原帖讲了一个具体故事，就复述同一个故事，起因、经过、转折、结局、人物关系和立场都不许改。",
+    "2. 禁止软化或升华：不许把露骨、出格、争议的内容改成安全中立的说法，不许把具体事件抽象成人生道理或干货总结。原帖的情绪强度和多大胆就写多大胆。",
+    "3. 事实原样保留：数字、金额、时间、地点、平台和品牌等专有名词照原帖保留，不得替换或编造。",
+    "4. 只许改文笔：换措辞、换句式、换节奏、换开头钩子，严禁照抄原句，但信息点必须能逐条对上原帖。",
+    "5. 语言必须与原帖一致：原帖英文就写英文，中文就写中文。",
+    `6. 排版与篇幅跟随原帖：原帖约 ${origLen} 字 ${origLines} 行，改写后总字数控制在 ${minLen}~${maxLen} 字，行数和分行方式与原帖保持一致。`,
+    "7. 第一步的风格画像必须落到具体写法上，不要写成“生动活泼”这类空泛形容词。",
+    "",
+    `【输出格式，严格遵守】：第 1 行只输出风格画像（单行不换行，60 字以内）；第 2 行只输出分隔符 ${STYLE_PROFILE_SEPARATOR}；之后只输出改写后的推文正文，正文前后不得出现任何解释、标题、引号或字数统计。`
   ].join("\n");
 
   const metricsInfo = sourceTweet.metricsText
@@ -201,7 +181,7 @@ async function rewritePost(payload = {}) {
   const userTextPrompt = [
     formatTweetBlock(sourceTweet, "【待改写的热门原帖】"),
     metricsInfo,
-    `\n【再次提醒字数限制】：原帖共 ${origLen} 字，请务必将改写后的总字数严格控制在 ${minLen}~${maxLen} 字以内（上下不超过 10 个字），直接输出改写正文：`
+    `\n【再次提醒】：先输出风格画像一行，再输出分隔符 ${STYLE_PROFILE_SEPARATOR}，最后输出改写正文。正文的题材、故事和事实必须与原帖完全一致（只换文笔，不改内容、不软化、不升华），语言、行数与字数（${minLen}~${maxLen} 字）都跟随原帖：`
   ].join("\n");
 
   let userContent = userTextPrompt;
@@ -221,7 +201,18 @@ async function rewritePost(payload = {}) {
     { role: "user", content: userContent }
   ];
 
-  return executeChatMessages(messages);
+  const raw = await executeChatMessages(messages);
+  const [stylePart, ...bodyParts] = raw.split(STYLE_PROFILE_SEPARATOR);
+
+  // 模型没按格式来时，整段当正文，不阻塞出稿
+  if (bodyParts.length === 0) return { text: raw, styleProfile: "" };
+
+  const text = bodyParts.join("").trim();
+  if (!text) {
+    throw new Error("模型只输出了风格分析，没有给出改写正文，请重试");
+  }
+
+  return { text, styleProfile: stylePart.trim() };
 }
 
 async function executeChatMessages(messages) {

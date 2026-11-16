@@ -8,16 +8,7 @@ const REPLY_STYLES = [
   { key: "english", label: "🌐 英文" }
 ];
 
-// 预设 @dukou_dk 专属爆款改写发帖风格
-const REWRITE_STYLES = [
-  { key: "info_gap", label: "💰 信息差拆解" },
-  { key: "hot_take", label: "🔥 暴论认知" },
-  { key: "question_hook", label: "❓ 互动提问" },
-  { key: "soft_promo", label: "📢 借势带货" }
-];
-
 const STYLE_STORAGE_KEY = "x_ai_reply_style";
-const REWRITE_STYLE_STORAGE_KEY = "x_ai_rewrite_style";
 let lastClickedReplyChain = [];
 
 // 热门帖子池与工作台状态
@@ -500,22 +491,6 @@ async function insertTextToDraftJs(editor, text) {
 // 模块二：多维度热门帖抓取雷达 + 单帖「🪄 仿写」按钮 + 右侧「🔥 热门选题改写台」
 // ============================================================================
 
-function getSavedRewriteStyle() {
-  try {
-    return localStorage.getItem(REWRITE_STYLE_STORAGE_KEY) || "info_gap";
-  } catch {
-    return "info_gap";
-  }
-}
-
-function saveRewriteStyle(style) {
-  try {
-    localStorage.setItem(REWRITE_STYLE_STORAGE_KEY, style);
-  } catch {
-    // 忽略异常
-  }
-}
-
 // 解析 X 上的紧凑数字格式（如 "1.2万", "3.5K", "2.1M", "1,234"）
 function parseCompactNumber(raw) {
   if (!raw) return 0;
@@ -776,7 +751,7 @@ function injectOrUpdateRewriteBtnOnArticle(article, enrichedPost) {
     btn.innerText = `🔥 爆款仿写`;
     btn.title = `${enrichedPost.tags.join(" | ")}（热度分: ${enrichedPost.hotScore}）\n${
       enrichedPost.metricsText
-    }\n点击使用 @dukou_dk 风格一键改写发帖`;
+    }\n点击按原帖的创作风格一键仿写`;
     btn.style.cssText = `
       align-self: center;
       margin-left: 6px;
@@ -875,7 +850,7 @@ function ensureHotRadarMounted() {
   `;
   header.innerHTML = `
     <div style="font-size:14px;font-weight:800;display:flex;align-items:center;gap:6px;">
-      <span>🔥 渡口 · 爆款捕手与 AI 改写台</span>
+      <span>🔥 爆款捕手 · 仿原帖文风改写台</span>
     </div>
     <button type="button" id="x-ai-panel-close" style="background:transparent;border:none;color:#8b98a5;font-size:16px;cursor:pointer;padding:2px 6px;">✕</button>
   `;
@@ -899,59 +874,21 @@ function ensureHotRadarMounted() {
     overflow: hidden;
     text-overflow: ellipsis;
   `;
-  sourceHint.innerText = "💡 点击任意推文下方「🪄 仿写」或下方热门榜单即可一键改写";
+  sourceHint.innerText = "💡 点击任意推文下方「🪄 仿写」或下方热门榜单，即按原帖创作风格仿写";
 
-  // 4种 @dukou_dk 专属改写风格按钮栏
-  const styleBar = document.createElement("div");
-  styleBar.style.cssText = `
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 5px;
+  // 展示 AI 从原帖拆解出的创作风格（改写成功后填充）
+  const styleHint = document.createElement("div");
+  styleHint.style.cssText = `
+    font-size: 11px;
+    line-height: 1.45;
+    color: #06b6d4;
+    background: rgba(6, 182, 212, 0.08);
+    border: 1px solid rgba(6, 182, 212, 0.25);
+    border-radius: 8px;
+    padding: 5px 8px;
+    display: none;
+    word-break: break-word;
   `;
-
-  const styleBtns = {};
-  const savedRewriteStyle = getSavedRewriteStyle();
-
-  REWRITE_STYLES.forEach((st) => {
-    const sBtn = document.createElement("button");
-    sBtn.type = "button";
-    sBtn.innerText = st.label;
-    sBtn.dataset.styleKey = st.key;
-    sBtn.style.cssText = `
-      padding: 5px 4px;
-      border-radius: 8px;
-      border: 1px solid rgba(29, 155, 240, 0.4);
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: all 0.15s;
-    `;
-    sBtn.addEventListener("click", () => {
-      saveRewriteStyle(st.key);
-      updateActiveStyleButtons(st.key);
-      if (activeRewriteSource) {
-        triggerRewriteGeneration(activeRewriteSource, st.key);
-      }
-    });
-    styleBtns[st.key] = sBtn;
-    styleBar.appendChild(sBtn);
-  });
-
-  function updateActiveStyleButtons(activeKey) {
-    Object.entries(styleBtns).forEach(([key, b]) => {
-      if (key === activeKey) {
-        b.style.background = "#1d9bf0";
-        b.style.color = "#ffffff";
-        b.style.borderColor = "#1d9bf0";
-      } else {
-        b.style.background = "rgba(29, 155, 240, 0.08)";
-        b.style.color = "#8ecdf8";
-        b.style.borderColor = "rgba(29, 155, 240, 0.3)";
-      }
-    });
-  }
-  updateActiveStyleButtons(savedRewriteStyle);
 
   // 改写结果可编辑文本框
   const rewriteTextarea = document.createElement("textarea");
@@ -1020,7 +957,7 @@ function ensureHotRadarMounted() {
       alert("请先在下方热门榜或页面推文中点选一条要改写的原帖");
       return;
     }
-    triggerRewriteGeneration(activeRewriteSource, getSavedRewriteStyle());
+    triggerRewriteGeneration(activeRewriteSource);
   });
 
   const copyBtn = document.createElement("button");
@@ -1051,7 +988,7 @@ function ensureHotRadarMounted() {
   studioActionRow.appendChild(copyBtn);
 
   studioBox.appendChild(sourceHint);
-  studioBox.appendChild(styleBar);
+  studioBox.appendChild(styleHint);
   studioBox.appendChild(rewriteTextarea);
   studioBox.appendChild(studioActionRow);
 
@@ -1184,10 +1121,10 @@ function ensureHotRadarMounted() {
     panel,
     toggleBtn,
     sourceHint,
+    styleHint,
     rewriteTextarea,
     regenBtn,
-    listContainer,
-    updateActiveStyleButtons
+    listContainer
   };
 
   updateRadarBadgeAndList();
@@ -1354,7 +1291,7 @@ function updateRadarBadgeAndList() {
   });
 }
 
-// 打开改写工作台并立即调用 AI 进行 @dukou_dk 风格二创改写
+// 打开改写工作台并立即调用 AI 按原帖创作风格二创改写
 function openRewriteWorkbench(postItem, autoTrigger = true) {
   ensureHotRadarMounted();
   activeRewriteSource = postItem;
@@ -1366,15 +1303,15 @@ function openRewriteWorkbench(postItem, autoTrigger = true) {
   radarUI.sourceHint.innerText = `🎯 原帖 (${postItem.metricsText || "已选中"}): ${snippet}...`;
 
   if (autoTrigger) {
-    triggerRewriteGeneration(postItem, getSavedRewriteStyle());
+    triggerRewriteGeneration(postItem);
   }
 }
 
-function triggerRewriteGeneration(sourceTweet, styleKey) {
+function triggerRewriteGeneration(sourceTweet) {
   if (!radarUI || !sourceTweet) return;
 
-  radarUI.updateActiveStyleButtons(styleKey);
-  radarUI.rewriteTextarea.value = "⏳ 正在按 @dukou_dk 爆款风格改写中...";
+  radarUI.styleHint.style.display = "none";
+  radarUI.rewriteTextarea.value = "⏳ 正在拆解原帖创作风格并仿写...";
   radarUI.rewriteTextarea.disabled = true;
   radarUI.regenBtn.disabled = true;
 
@@ -1382,10 +1319,7 @@ function triggerRewriteGeneration(sourceTweet, styleKey) {
     chrome.runtime.sendMessage(
       {
         action: "REWRITE_POST",
-        payload: {
-          style: styleKey,
-          sourceTweet
-        }
+        payload: { sourceTweet }
       },
       (response) => {
         radarUI.rewriteTextarea.disabled = false;
@@ -1399,6 +1333,10 @@ function triggerRewriteGeneration(sourceTweet, styleKey) {
 
         if (response && response.success) {
           radarUI.rewriteTextarea.value = response.text;
+          if (response.styleProfile) {
+            radarUI.styleHint.innerText = `🪞 识别到的原帖风格：${response.styleProfile}`;
+            radarUI.styleHint.style.display = "block";
+          }
         } else {
           radarUI.rewriteTextarea.value = "";
           alert("改写失败: " + (response?.error || "未知错误"));
