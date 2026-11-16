@@ -11,6 +11,27 @@ const REPLY_STYLES = [
 const STYLE_STORAGE_KEY = "x_ai_reply_style";
 let lastClickedReplyChain = [];
 
+// intercept.js（MAIN world）从 X 自己的 GraphQL 响应里捞出来的长帖全文：推文 id -> 完整正文
+const noteTweetTexts = new Map();
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== "https://x.com") return;
+  const data = event.data;
+  if (!data || data.__xAiFullText !== "note-tweet" || !Array.isArray(data.entries)) return;
+
+  data.entries.forEach((entry) => {
+    if (entry && entry.id && entry.text) noteTweetTexts.set(entry.id, entry.text);
+  });
+});
+
+// 折叠的长帖 DOM 里只有「显示更多」之前那截，正文一律以接口全文为准
+function tweetTextFromEl(el, tweetId) {
+  return X_AI_CAPTURE.pickFullText(
+    el.innerText,
+    (tweetId && noteTweetTexts.get(tweetId)) || ""
+  );
+}
+
 // 热门帖子池与工作台状态
 const hotPostsPool = new Map(); // key: tweetKey -> postItem
 let currentThresholdPreset = "balanced"; // balanced | strict | loose
@@ -254,18 +275,22 @@ function extractSingleTweet(article) {
 
   // 2. 区分主推文文本与内嵌引用推文文本 (Quote Tweet)
   const textEls = Array.from(article.querySelectorAll('[data-testid="tweetText"]'));
-  let text = "";
-  let quotedText = "";
-  if (textEls.length === 1) {
-    text = textEls[0].innerText.trim();
-  } else if (textEls.length >= 2) {
-    text = textEls[0].innerText.trim();
-    quotedText = textEls
-      .slice(1)
-      .map((el) => el.innerText.trim())
-      .filter(Boolean)
-      .join(" / ");
-  }
+  const timeEl = article.querySelector("time[datetime]");
+  const ownLink = timeEl ? timeEl.closest('a[href*="/status/"]') : null;
+  const ownId = X_AI_CAPTURE.statusIdFromHref(ownLink ? ownLink.getAttribute("href") : "");
+
+  const text = textEls.length >= 1 ? tweetTextFromEl(textEls[0], ownId) : "";
+
+  const quotedText = textEls
+    .slice(1)
+    .map((el) => {
+      // 引用卡片自身是个 role="link" 容器，里面另有一条指向被引用推文的链接
+      const card = el.closest('[role="link"]');
+      const link = card ? card.querySelector('a[href*="/status/"]') : null;
+      return tweetTextFromEl(el, X_AI_CAPTURE.statusIdFromHref(link ? link.getAttribute("href") : ""));
+    })
+    .filter(Boolean)
+    .join(" / ");
 
   // 3. 提取图片、视频、外链卡片、投票等媒体信息
   const mediaSummary = [];
@@ -565,9 +590,11 @@ function extractTweetMetrics(article) {
 
   // 3. 发布时间与直达链接
   let ageHours = null;
+  let datetime = "";
   let tweetUrl = "";
   const timeEl = article.querySelector("time[datetime]");
   if (timeEl) {
+    datetime = timeEl.getAttribute("datetime") || "";
     const dt = new Date(timeEl.getAttribute("datetime")).getTime();
     if (!Number.isNaN(dt)) {
       ageHours = Math.max(0.1, (Date.now() - dt) / 3600000);
@@ -596,6 +623,7 @@ function extractTweetMetrics(article) {
     reposts,
     bookmarks,
     ageHours,
+    datetime,
     tweetUrl,
     isAd
   };
@@ -707,11 +735,15 @@ function scanVisibleTweets() {
     // 注入或更新每条推文底部的「🪄 仿写 / 🔥 爆款仿写」按钮
     injectOrUpdateRewriteBtnOnArticle(article, enrichedPost);
 
+    // 采集模式：滚动刷到的帖子一律记录，不受热门门槛影响
+    if (captureState.active) captureScannedPost(enrichedPost);
+
     // 若满足多维热门标准（含曝光 < 10万），且正文字数 >= 10，加入热门池
     const contentLength = (baseTweet.text || "").length + (baseTweet.quotedText || "").length;
     if (evaluation.isHot && contentLength >= 10) {
       const existing = hotPostsPool.get(tweetKey);
-      if (!existing || existing.hotScore !== evaluation.hotScore) {
+      // 全文是后到的：正文变长时也要刷新池子里那份，否则仿写台拿到的还是截断版
+      if (!existing || existing.hotScore !== evaluation.hotScore || existing.text !== baseTweet.text) {
         hotPostsPool.set(tweetKey, enrichedPost);
         poolUpdated = true;
       }
@@ -876,6 +908,41 @@ function ensureHotRadarMounted() {
   `;
   sourceHint.innerText = "💡 点击任意推文下方「🪄 仿写」或下方热门榜单，即按原帖创作风格仿写";
 
+  // 博主主页帖子采集控制条
+  const pillCss =
+    "padding:5px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.2);" +
+    "background:transparent;color:#e7e9ea;font-size:11px;font-weight:700;cursor:pointer;";
+
+  const captureBar = document.createElement("div");
+  captureBar.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+
+  const captureToggleBtn = document.createElement("button");
+  captureToggleBtn.type = "button";
+  captureToggleBtn.style.cssText = pillCss;
+  captureToggleBtn.addEventListener("click", toggleCapture);
+
+  const exportBtn = document.createElement("button");
+  exportBtn.type = "button";
+  exportBtn.innerText = "⬇ 导出 MD";
+  exportBtn.style.cssText = pillCss;
+  exportBtn.addEventListener("click", () => exportCaptureToMarkdown());
+
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.innerText = "✕ 清空";
+  clearBtn.style.cssText = pillCss;
+  clearBtn.addEventListener("click", () => {
+    if (confirm("确定清空已采集的帖子？未导出的内容会丢失。")) clearCapturePosts();
+  });
+
+  const captureStatus = document.createElement("span");
+  captureStatus.style.cssText = "font-size:11px;color:#8b98a5;";
+
+  captureBar.appendChild(captureToggleBtn);
+  captureBar.appendChild(exportBtn);
+  captureBar.appendChild(clearBtn);
+  captureBar.appendChild(captureStatus);
+
   // 展示 AI 从原帖拆解出的创作风格（改写成功后填充）
   const styleHint = document.createElement("div");
   styleHint.style.cssText = `
@@ -988,6 +1055,7 @@ function ensureHotRadarMounted() {
   studioActionRow.appendChild(copyBtn);
 
   studioBox.appendChild(sourceHint);
+  studioBox.appendChild(captureBar);
   studioBox.appendChild(styleHint);
   studioBox.appendChild(rewriteTextarea);
   studioBox.appendChild(studioActionRow);
@@ -1122,11 +1190,17 @@ function ensureHotRadarMounted() {
     toggleBtn,
     sourceHint,
     styleHint,
+    captureToggleBtn,
+    exportBtn,
+    clearBtn,
+    captureStatus,
     rewriteTextarea,
     regenBtn,
     listContainer
   };
 
+  restoreCaptureBuffer();
+  updateCaptureUi();
   updateRadarBadgeAndList();
 }
 
@@ -1385,4 +1459,190 @@ async function fillIntoGlobalPostComposer(text) {
   }
 
   await insertTextToDraftJs(targetEditor, text);
+}
+
+// ============================================================================
+// 模块三：博主主页帖子采集（滚动即记录，导出为本地 Markdown）
+// ============================================================================
+
+const CAPTURE_STORAGE_KEY = "x_ai_capture_buffer";
+
+const captureState = {
+  active: false,
+  handle: "",
+  profileUrl: "",
+  buffer: X_AI_CAPTURE.createCaptureBuffer()
+};
+
+let capturePersistTimer = null;
+
+function persistCaptureBuffer() {
+  try {
+    localStorage.setItem(
+      CAPTURE_STORAGE_KEY,
+      JSON.stringify({
+        handle: captureState.handle,
+        profileUrl: captureState.profileUrl,
+        posts: captureState.buffer.posts
+      })
+    );
+  } catch {
+    // 超出 localStorage 配额时降级为只在内存保留，导出依旧可用
+  }
+}
+
+function scheduleCapturePersist() {
+  if (capturePersistTimer) return;
+  capturePersistTimer = setTimeout(() => {
+    capturePersistTimer = null;
+    persistCaptureBuffer();
+  }, 1200);
+}
+
+// 刷新页面后找回上一批没导出的帖子
+function restoreCaptureBuffer() {
+  let raw = "";
+  try {
+    raw = localStorage.getItem(CAPTURE_STORAGE_KEY) || "";
+  } catch {
+    return;
+  }
+  if (!raw) return;
+
+  try {
+    const saved = JSON.parse(raw);
+    if (!saved || !Array.isArray(saved.posts) || saved.posts.length === 0) return;
+    captureState.handle = saved.handle || "";
+    captureState.profileUrl = saved.profileUrl || "";
+    saved.posts.forEach((item) => X_AI_CAPTURE.addCapture(captureState.buffer, item));
+  } catch {
+    try {
+      localStorage.removeItem(CAPTURE_STORAGE_KEY);
+    } catch {
+      // 存储不可用，忽略
+    }
+  }
+}
+
+function clearCapturePosts() {
+  captureState.buffer = X_AI_CAPTURE.createCaptureBuffer();
+  persistCaptureBuffer();
+  updateCaptureUi();
+}
+
+function captureScannedPost(enrichedPost) {
+  const item = {
+    authorHandle: X_AI_CAPTURE.handleFromAuthorText(enrichedPost.author),
+    author: enrichedPost.author,
+    text: enrichedPost.text,
+    quotedText: enrichedPost.quotedText,
+    mediaSummary: enrichedPost.mediaSummary,
+    tweetUrl: enrichedPost.tweetUrl,
+    datetime: enrichedPost.datetime,
+    metricsText: enrichedPost.metricsText,
+    isAd: enrichedPost.isAd
+  };
+  if (!X_AI_CAPTURE.shouldCapture(item, captureState.handle)) return;
+  if (!X_AI_CAPTURE.addCapture(captureState.buffer, item)) return;
+
+  scheduleCapturePersist();
+  updateCaptureUi();
+
+  if (captureState.buffer.posts.length >= X_AI_CAPTURE.MAX_CAPTURE) {
+    stopCapture();
+    alert(`已采满 ${X_AI_CAPTURE.MAX_CAPTURE} 条（单文件上限），自动停止并导出。`);
+    exportCaptureToMarkdown();
+  }
+}
+
+function startCapture() {
+  const pageHandle = X_AI_CAPTURE.resolveProfileHandle(location.href);
+  const buffered = captureState.buffer.posts.length;
+
+  if (buffered > 0 && pageHandle !== captureState.handle) {
+    const from = captureState.handle ? `@${captureState.handle}` : "上一批";
+    const to = pageHandle ? `@${pageHandle}` : "当前页（不限作者）";
+    if (!confirm(`缓冲区里还有 ${from} 的 ${buffered} 条未导出，改成采集${to}会清空，继续吗？`)) return;
+    clearCapturePosts();
+  }
+
+  captureState.handle = pageHandle || "";
+  captureState.profileUrl = pageHandle
+    ? `https://x.com/${pageHandle}`
+    : location.href.split("?")[0];
+  captureState.active = true;
+  updateCaptureUi();
+
+  // 立即把当前屏幕上的帖子收进来，不等下一次滚动
+  scanVisibleTweets();
+}
+
+function stopCapture() {
+  captureState.active = false;
+  persistCaptureBuffer();
+  updateCaptureUi();
+}
+
+function toggleCapture() {
+  if (captureState.active) {
+    stopCapture();
+    exportCaptureToMarkdown();
+  } else {
+    startCapture();
+  }
+}
+
+async function exportCaptureToMarkdown() {
+  if (!radarUI) return;
+
+  const posts = captureState.buffer.posts;
+  if (posts.length === 0) {
+    radarUI.captureStatus.innerText = "缓冲区是空的，先开始采集再滑动浏览";
+    return;
+  }
+
+  const now = new Date();
+  const markdown = X_AI_CAPTURE.renderPostsToMarkdown(posts, {
+    handle: captureState.handle,
+    profileUrl: captureState.profileUrl || location.href.split("?")[0],
+    collectedAt: now
+  });
+  const filename = `x博主采集/${X_AI_CAPTURE.buildCaptureFilename(captureState.handle, now)}`;
+
+  radarUI.exportBtn.disabled = true;
+  radarUI.captureStatus.innerText = "⏳ 正在写出 MD 文件...";
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: "SAVE_MARKDOWN",
+      payload: { markdown, filename }
+    });
+
+    if (response && response.success) {
+      radarUI.captureStatus.innerText = `✅ 已导出 ${posts.length} 条到「下载/${response.filename}」`;
+    } else {
+      radarUI.captureStatus.innerText = "";
+      alert("导出失败：" + (response?.error || "未知错误"));
+    }
+  } catch (err) {
+    radarUI.captureStatus.innerText = "";
+    alert(`导出失败：${err.message}\n改动 manifest.json 后需在 chrome://extensions 重新加载插件，并刷新 X 页面。`);
+  } finally {
+    radarUI.exportBtn.disabled = false;
+  }
+}
+
+function updateCaptureUi() {
+  if (!radarUI) return;
+
+  const count = captureState.buffer.posts.length;
+  const scope = captureState.handle ? `@${captureState.handle}` : "不限作者";
+
+  radarUI.captureToggleBtn.innerText = captureState.active ? "⏹ 停止并导出" : "⏺ 采集本页";
+  radarUI.captureToggleBtn.style.background = captureState.active ? "#ef4444" : "transparent";
+  radarUI.captureToggleBtn.style.borderColor = captureState.active ? "#ef4444" : "rgba(255,255,255,0.2)";
+  radarUI.captureToggleBtn.style.color = captureState.active ? "#ffffff" : "#e7e9ea";
+  radarUI.captureStatus.innerText = `已采 ${count} 条 · ${scope}${captureState.active ? " · 滚动即记录" : ""}`;
+  radarUI.exportBtn.disabled = count === 0;
+  radarUI.clearBtn.disabled = count === 0;
 }

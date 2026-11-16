@@ -3,6 +3,7 @@
   "name": "X AI 评论助手 (BYOK)",
   "version": "1.0",
   "description": "提取X推文并调用自定义大模型API生成回复",
+  "permissions": ["downloads"],
   "host_permissions": [
     "https://x.com/*",
     "https://api.deepseek.com/*",
@@ -19,7 +20,13 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*"],
-      "js": ["content.js"],
+      "js": ["intercept.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://x.com/*"],
+      "js": ["capture.js", "content.js"],
       "run_at": "document_idle"
     }
   ]

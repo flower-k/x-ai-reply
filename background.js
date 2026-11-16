@@ -47,7 +47,74 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+  if (request.action === "SAVE_MARKDOWN") {
+    saveMarkdown(request.payload)
+      .then((filename) => sendResponse({ success: true, filename }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
+
+// MV3 service worker 里没有 URL.createObjectURL，只能走 data URL，
+// 而 Chrome 对下载 URL 有约 2M 字符的硬上限，这里留出余量
+const MAX_DOWNLOAD_URL_LENGTH = 1_500_000;
+
+function toBase64Utf8(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+// 把采集到的 Markdown 存成本地文件，落在浏览器下载目录的 x博主采集/ 子目录下
+async function saveMarkdown({ markdown, filename } = {}) {
+  if (!markdown || !markdown.trim()) throw new Error("没有可导出的内容");
+  if (typeof chrome.downloads?.download !== "function") {
+    throw new Error("插件拿不到 downloads 权限，请在 chrome://extensions 重新加载本插件");
+  }
+
+  const dataUrl = `data:text/markdown;charset=utf-8;base64,${toBase64Utf8(markdown)}`;
+  if (dataUrl.length > MAX_DOWNLOAD_URL_LENGTH) {
+    throw new Error(
+      `本次采集内容过大（约 ${(dataUrl.length / 1048576).toFixed(1)}MB，单次导出上限约 1.4MB），请点「✕ 清空」后分几批滚动采集再导出`
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    let downloadId = null;
+
+    const finish = (error) => {
+      if (downloadId !== null) chrome.downloads.onChanged.removeListener(onChanged);
+      if (error) reject(error);
+      else resolve(filename);
+    };
+
+    // chrome.downloads.onChanged 给的是 { id, state: { previous, current } }
+    function onChanged(delta) {
+      if (delta.id !== downloadId || !delta.state) return;
+      const state = delta.state.current;
+      if (state === "complete") return finish();
+      if (state === "interrupted" || state === "cancelled") {
+        return finish(new Error(state === "cancelled" ? "下载已取消" : "下载被打断"));
+      }
+    }
+
+    chrome.downloads.download(
+      { url: dataUrl, filename, saveAs: false, conflictAction: "uniquify" },
+      (id) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        downloadId = id;
+        chrome.downloads.onChanged.addListener(onChanged);
+      }
+    );
+  });
+}
 
 function formatTweetBlock(tweet, label) {
   if (!tweet) return "";
