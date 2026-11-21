@@ -860,14 +860,14 @@ function ensureHotRadarMounted() {
     display: none;
     flex-direction: column;
     width: 390px;
-    max-height: 82vh;
+    max-height: 86vh;
     margin-bottom: 10px;
     border-radius: 16px;
     border: 1px solid rgba(255, 255, 255, 0.14);
     background: #15202b;
     color: #f7f9f9;
     box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
-    overflow: hidden;
+    overflow-y: auto;
   `;
 
   // 1. 顶部标题栏
@@ -942,6 +942,95 @@ function ensureHotRadarMounted() {
   captureBar.appendChild(exportBtn);
   captureBar.appendChild(clearBtn);
   captureBar.appendChild(captureStatus);
+
+  // 手动粘贴原帖改写区（支持直接粘贴任意帖子文本一键改写）
+  const pasteBox = document.createElement("div");
+  pasteBox.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 10px;
+    background: rgba(15, 20, 25, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  `;
+
+  const pasteTextarea = document.createElement("textarea");
+  pasteTextarea.rows = 3;
+  pasteTextarea.placeholder = "📥 在此粘贴你要改写的原帖内容，点击下方「🪄 改写此帖」即可按原帖风格二创...";
+  pasteTextarea.style.cssText = `
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: #0f1419;
+    color: #f7f9f9;
+    font-size: 12px;
+    line-height: 1.45;
+    resize: vertical;
+    outline: none;
+  `;
+
+  const pasteActionRow = document.createElement("div");
+  pasteActionRow.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  `;
+
+  const manualRewriteBtn = document.createElement("button");
+  manualRewriteBtn.type = "button";
+  manualRewriteBtn.innerText = "🪄 改写此帖";
+  manualRewriteBtn.style.cssText = `
+    flex: 1;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: none;
+    background: linear-gradient(90deg, #f97316 0%, #ea580c 100%);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+  `;
+  manualRewriteBtn.addEventListener("click", () => {
+    const pastedText = pasteTextarea.value.trim();
+    if (!pastedText) {
+      alert("请先在输入框中粘贴要改写的原帖内容");
+      pasteTextarea.focus();
+      return;
+    }
+    const customPost = {
+      text: pastedText,
+      hasContent: true,
+      metricsText: "手动粘贴原帖",
+      isManualPaste: true
+    };
+    openRewriteWorkbench(customPost, true);
+  });
+
+  const manualClearBtn = document.createElement("button");
+  manualClearBtn.type = "button";
+  manualClearBtn.innerText = "✕ 清空";
+  manualClearBtn.style.cssText = `
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: transparent;
+    color: #8b98a5;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  `;
+  manualClearBtn.addEventListener("click", () => {
+    pasteTextarea.value = "";
+    pasteTextarea.focus();
+  });
+
+  pasteActionRow.appendChild(manualRewriteBtn);
+  pasteActionRow.appendChild(manualClearBtn);
+  pasteBox.appendChild(pasteTextarea);
+  pasteBox.appendChild(pasteActionRow);
 
   // 展示 AI 从原帖拆解出的创作风格（改写成功后填充）
   const styleHint = document.createElement("div");
@@ -1020,8 +1109,17 @@ function ensureHotRadarMounted() {
     cursor: pointer;
   `;
   regenBtn.addEventListener("click", () => {
+    const pastedText = pasteTextarea.value.trim();
+    if ((!activeRewriteSource || activeRewriteSource.isManualPaste) && pastedText) {
+      activeRewriteSource = {
+        text: pastedText,
+        hasContent: true,
+        metricsText: "手动粘贴原帖",
+        isManualPaste: true
+      };
+    }
     if (!activeRewriteSource) {
-      alert("请先在下方热门榜或页面推文中点选一条要改写的原帖");
+      alert("请先粘贴原帖点击「🪄 改写此帖」，或在下方热门榜/页面推文中点选一条要改写的原帖");
       return;
     }
     triggerRewriteGeneration(activeRewriteSource);
@@ -1056,6 +1154,7 @@ function ensureHotRadarMounted() {
 
   studioBox.appendChild(sourceHint);
   studioBox.appendChild(captureBar);
+  studioBox.appendChild(pasteBox);
   studioBox.appendChild(styleHint);
   studioBox.appendChild(rewriteTextarea);
   studioBox.appendChild(studioActionRow);
@@ -1194,6 +1293,8 @@ function ensureHotRadarMounted() {
     exportBtn,
     clearBtn,
     captureStatus,
+    pasteTextarea,
+    manualRewriteBtn,
     rewriteTextarea,
     regenBtn,
     listContainer
@@ -1388,6 +1489,10 @@ function triggerRewriteGeneration(sourceTweet) {
   radarUI.rewriteTextarea.value = "⏳ 正在拆解原帖创作风格并仿写...";
   radarUI.rewriteTextarea.disabled = true;
   radarUI.regenBtn.disabled = true;
+  if (radarUI.manualRewriteBtn) {
+    radarUI.manualRewriteBtn.disabled = true;
+    radarUI.manualRewriteBtn.innerText = "⏳ 改写中...";
+  }
 
   try {
     chrome.runtime.sendMessage(
@@ -1398,6 +1503,10 @@ function triggerRewriteGeneration(sourceTweet) {
       (response) => {
         radarUI.rewriteTextarea.disabled = false;
         radarUI.regenBtn.disabled = false;
+        if (radarUI.manualRewriteBtn) {
+          radarUI.manualRewriteBtn.disabled = false;
+          radarUI.manualRewriteBtn.innerText = "🪄 改写此帖";
+        }
 
         if (chrome.runtime.lastError) {
           radarUI.rewriteTextarea.value = "";
@@ -1420,6 +1529,10 @@ function triggerRewriteGeneration(sourceTweet) {
   } catch {
     radarUI.rewriteTextarea.disabled = false;
     radarUI.regenBtn.disabled = false;
+    if (radarUI.manualRewriteBtn) {
+      radarUI.manualRewriteBtn.disabled = false;
+      radarUI.manualRewriteBtn.innerText = "🪄 改写此帖";
+    }
     radarUI.rewriteTextarea.value = "";
     alert("插件已更新，请先按 Cmd+R 刷新当前 X 页面后再试！");
   }
