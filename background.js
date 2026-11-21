@@ -15,20 +15,22 @@ let cachedWorkingModel = null;
 // 可将 ENABLE_VISION 设为 true，插件会自动把推文图片 URL 传给大模型进行真正的“看图评论”
 const ENABLE_VISION = false;
 
-// 预设评论多风格指令
+// 预设评论多风格指令（会自动跟随被回复推文的语言）
 const STYLE_PROMPTS = {
   default:
-    "请写一条简短、自然、接地气的评论（15字以内）。像平时刷推随手留下的真人评论，可以适当赞同、调侃或聊两句。",
+    "请写一条简短、自然、接地气的评论（中文15字以内 / 英文12词以内）。像平时刷推随手留下的真人评论，可以适当赞同、调侃或聊两句。",
   agree:
-    "请写一条真诚赞同、产生共鸣的评论（30字以内）。顺着对方的核心观点补充一个小细节或切身体会，自然不吹捧。",
+    "请写一条真诚赞同、产生共鸣的评论（中文30字以内 / 英文20词以内）。顺着对方的核心观点补充一个小细节或切身体会，自然不吹捧。",
   question:
-    "请针对推文或评论中的某个具体细节，提出一个轻巧、有深度、能让推主有回复欲的追问（30字以内）。",
+    "请针对推文或评论中的某个具体细节，提出一个轻巧、有深度、能让推主有回复欲的追问（中文30字以内 / 英文20词以内）。",
   humor:
-    "请写一条轻松幽默、接梗或善意小吐槽的评论（30字以内）。网感好，像熟人朋友之间的风趣互动。",
+    "请写一条轻松幽默、接梗或善意小吐槽的评论（中文30字以内 / 英文20词以内）。网感好，像熟人朋友之间的风趣互动。",
   insight:
-    "请围绕推文话题补充一个独到的小视角、实操经验或延伸思考（40字以内），显得专业、内行且有建设性。",
+    "请围绕推文话题补充一个独到的小视角、实操经验或延伸思考（中文40字以内 / 英文25词以内），显得专业、内行且有建设性。",
   english:
-    "Write a short, natural, casual English reply (under 20 words) with authentic tech Twitter / indie hacker vibes. No corporate tone, no period at the end."
+    "Write a short, natural, casual English reply (under 20 words) with authentic tech Twitter / indie hacker vibes. No corporate tone, no period at the end.",
+  mutual_follow:
+    "这是一条蓝V互关/交朋友的帖子，你已经关注了作者。请写一条自然、真诚、接地气的互关交友评论（中文20字以内 / 英文15词以内），表达“已关/交个朋友/常互动”之意，如果原帖提到了作者的领域或目标（如AI、独立开发、出海、冲万粉等），可以顺带自然呼应一句，像真人博主打招呼，不要死板复读。"
 };
 
 // 二创改写时，模型输出风格画像与正文之间的分隔符
@@ -135,16 +137,23 @@ function formatTweetBlock(tweet, label) {
 async function generateReply(payload = {}) {
   const {
     style = "default",
+    isMutualFollow = false,
     targetTweet,
     threadContext = [],
     tweetText // 兼容旧版纯文本字段
   } = payload;
 
-  const styleInstruction = STYLE_PROMPTS[style] || STYLE_PROMPTS.default;
+  const effectiveStyle = isMutualFollow ? "mutual_follow" : style;
+  const styleInstruction = STYLE_PROMPTS[effectiveStyle] || STYLE_PROMPTS.default;
+  const languageRule =
+    effectiveStyle === "english"
+      ? "【语言要求】：必须使用地道的英文（English）回复。"
+      : "【语言强制对齐规则（最高优先级）】：请自动识别【当前你要回复的推文/评论】所使用的语言，并严格使用同一种语言回复！如果原帖是英文，必须用英文回复；如果原帖是日文、韩文、法文、西班牙文或繁体中文等，也必须使用对应的语言回复；只有原帖是简体中文时才用简体中文回复。";
 
   const systemPrompt = [
     "你是一个活跃在 X (Twitter) 上的独立开发者。",
     styleInstruction,
+    languageRule,
     "通用要求：不要用客服腔调或说教口吻，不要用句号结尾，不要加引号包裹回复内容，直接输出评论正文。"
   ].join("\n");
 
@@ -174,9 +183,14 @@ async function generateReply(payload = {}) {
         "请注意：你正在“楼中楼”里回复最后一条【当前你要直接回复的目标评论/推文】，请结合前文背景，直接针对该目标评论作出回应。"
       );
     }
+    sections.push(
+      effectiveStyle === "english"
+        ? "请用英文（English）直接输出你的回复正文："
+        : "请严格使用与上述【当前你要回复的推文/评论】相同的语言（例如原帖是英文就用英文，其他语言同理），直接输出回复正文："
+    );
     userTextPrompt = sections.join("\n\n---\n\n");
   } else {
-    userTextPrompt = `推文内容：\n${tweetText || ""}`;
+    userTextPrompt = `推文内容：\n${tweetText || ""}\n\n请使用与该推文相同的语言直接输出回复正文：`;
   }
 
   // 构建 user message content（若开启 ENABLE_VISION 且存在图片，则使用多模态数组格式）

@@ -1159,7 +1159,143 @@ function ensureHotRadarMounted() {
   studioBox.appendChild(rewriteTextarea);
   studioBox.appendChild(studioActionRow);
 
-  // 3. 热门帖扫描与多维排序控制栏
+  // 3. 全自动浏览 + 蓝V互关 + 自动评论巡航控制区
+  const autoCruiseBox = document.createElement("div");
+  autoCruiseBox.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 9px 12px;
+    background: #172330;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  `;
+
+  const autoCruiseTopRow = document.createElement("div");
+  autoCruiseTopRow.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  `;
+
+  const autoCruiseTitle = document.createElement("span");
+  autoCruiseTitle.style.cssText = `
+    font-size: 12px;
+    font-weight: 800;
+    color: #38bdf8;
+  `;
+  autoCruiseTitle.innerText = "🤖 全自动浏览评论巡航（每3条休1~2分钟）";
+
+  const autoFollowLabel = document.createElement("label");
+  autoFollowLabel.style.cssText = `
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #fbbf24;
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+  `;
+  const autoFollowCheckbox = document.createElement("input");
+  autoFollowCheckbox.type = "checkbox";
+  autoFollowCheckbox.checked = true;
+  autoFollowCheckbox.style.cssText = "margin:0;cursor:pointer;";
+  autoFollowLabel.appendChild(autoFollowCheckbox);
+  autoFollowLabel.appendChild(document.createTextNode("🤝 蓝V互关帖自动先关注"));
+
+  autoCruiseTopRow.appendChild(autoCruiseTitle);
+  autoCruiseTopRow.appendChild(autoFollowLabel);
+
+  const autoCruiseConfigRow = document.createElement("div");
+  autoCruiseConfigRow.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  `;
+
+  const autoCruiseModeSelect = document.createElement("select");
+  autoCruiseModeSelect.title = "选择自动评论的目标帖筛选标准";
+  autoCruiseModeSelect.style.cssText = `
+    flex: 1;
+    padding: 5px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: #0f1419;
+    color: #e7e9ea;
+    font-size: 11px;
+    outline: none;
+  `;
+  [
+    { value: "hot_and_mutual", text: "🔥 潜力热门帖 + 🤝 蓝V互关帖" },
+    { value: "mutual_only", text: "🤝 仅评蓝V互关/交朋友帖" },
+    { value: "all_valid", text: "📋 当前页所有非广告正常帖" }
+  ].forEach((opt) => {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.innerText = opt.text;
+    autoCruiseModeSelect.appendChild(o);
+  });
+
+  const autoCruiseLimitSelect = document.createElement("select");
+  autoCruiseLimitSelect.title = "本轮自动评论的总条数上限";
+  autoCruiseLimitSelect.style.cssText = `
+    padding: 5px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: #0f1419;
+    color: #e7e9ea;
+    font-size: 11px;
+    outline: none;
+  `;
+  [
+    { value: "6", text: "上限 6 条" },
+    { value: "9", text: "上限 9 条" },
+    { value: "15", text: "上限 15 条" },
+    { value: "30", text: "上限 30 条" }
+  ].forEach((opt) => {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.innerText = opt.text;
+    if (opt.value === "9") o.selected = true;
+    autoCruiseLimitSelect.appendChild(o);
+  });
+
+  const autoCruiseBtn = document.createElement("button");
+  autoCruiseBtn.type = "button";
+  autoCruiseBtn.innerText = "▶ 启动自动评论";
+  autoCruiseBtn.style.cssText = `
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: none;
+    background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+    white-space: nowrap;
+  `;
+  autoCruiseBtn.addEventListener("click", () => {
+    toggleAutoCommentCruise();
+  });
+
+  autoCruiseConfigRow.appendChild(autoCruiseModeSelect);
+  autoCruiseConfigRow.appendChild(autoCruiseLimitSelect);
+  autoCruiseConfigRow.appendChild(autoCruiseBtn);
+
+  const autoCruiseStatus = document.createElement("div");
+  autoCruiseStatus.style.cssText = `
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.4;
+    display: none;
+  `;
+
+  autoCruiseBox.appendChild(autoCruiseTopRow);
+  autoCruiseBox.appendChild(autoCruiseConfigRow);
+  autoCruiseBox.appendChild(autoCruiseStatus);
+
+  // 4. 热门帖扫描与多维排序控制栏
   const filterBar = document.createElement("div");
   filterBar.style.cssText = `
     display: flex;
@@ -1263,6 +1399,7 @@ function ensureHotRadarMounted() {
 
   panel.appendChild(header);
   panel.appendChild(studioBox);
+  panel.appendChild(autoCruiseBox);
   panel.appendChild(filterBar);
   panel.appendChild(listContainer);
 
@@ -1297,6 +1434,11 @@ function ensureHotRadarMounted() {
     manualRewriteBtn,
     rewriteTextarea,
     regenBtn,
+    autoFollowCheckbox,
+    autoCruiseModeSelect,
+    autoCruiseLimitSelect,
+    autoCruiseBtn,
+    autoCruiseStatus,
     listContainer
   };
 
@@ -1758,4 +1900,577 @@ function updateCaptureUi() {
   radarUI.captureStatus.innerText = `已采 ${count} 条 · ${scope}${captureState.active ? " · 滚动即记录" : ""}`;
   radarUI.exportBtn.disabled = count === 0;
   radarUI.clearBtn.disabled = count === 0;
+}
+
+// ============================================================================
+// 模块四：全自动浏览帖子 + 蓝V互关交友自动关注 + 全自动评论巡航（每3条休息1~2分钟）
+// ============================================================================
+
+const AUTO_COMMENTED_TWEETS_KEY = "x_ai_auto_commented_tweets";
+const AUTO_COMMENTED_AUTHORS_KEY = "x_ai_auto_commented_authors";
+const AUTHOR_COOLDOWN_MS = 12 * 3600 * 1000; // 同一作者 12 小时内最多自动评论 1 次
+
+// 识别“蓝V互关 / 交朋友 / 有粉必回”类帖子的特征词
+const MUTUAL_FOLLOW_REGEX =
+  /互关|互粉|交个朋友|交朋友|浇朋友|浇个朋友|有粉必回|必回关|秒回关|回关|互赞|互评|抱团|取暖|认识一下|蓝[vV]互|冲\s*\d+\s*[粉kK万]|破千|破万|涨粉|活跃号|铁粉|连接一下|找组织|\b(f4f|follow\s*back|follow\s*for\s*follow|let'?s\s*connect|mutuals)\b/i;
+
+// 敏感/哀悼类内容自动跳过，避免误评翻车
+const SENSITIVE_SKIP_REGEX = /去世|逝世|哀悼|讣告|遇难|安息|\bRIP\b/i;
+
+// 普通热门帖自动评论时轮换使用的多样化风格（避免连续评论句式单一）
+const AUTO_ROTATE_STYLES = ["default", "agree", "question", "insight", "humor"];
+
+const autoCruiseState = {
+  running: false,
+  completedCount: 0,
+  followedCount: 0,
+  maxLimit: 9,
+  consecutiveErrors: 0,
+  sessionVisitedKeys: new Set()
+};
+
+function sleepInterruptible(ms) {
+  return new Promise((resolve) => {
+    const step = 250;
+    let elapsed = 0;
+    const timer = setInterval(() => {
+      elapsed += step;
+      if (!autoCruiseState.running || elapsed >= ms) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, step);
+  });
+}
+
+function loadJsonMapFromStorage(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) || {} : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveJsonMapToStorage(key, mapObj, maxEntries = 500) {
+  try {
+    const entries = Object.entries(mapObj).sort((a, b) => b[1] - a[1]).slice(0, maxEntries);
+    localStorage.setItem(key, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // 忽略存储配额异常
+  }
+}
+
+function hasTweetBeenAutoCommented(tweetKey) {
+  if (!tweetKey) return false;
+  const map = loadJsonMapFromStorage(AUTO_COMMENTED_TWEETS_KEY);
+  return Boolean(map[tweetKey]);
+}
+
+function isAuthorInAutoCooldown(authorHandle) {
+  if (!authorHandle) return false;
+  const map = loadJsonMapFromStorage(AUTO_COMMENTED_AUTHORS_KEY);
+  const lastTs = map[authorHandle.toLowerCase()];
+  if (!lastTs) return false;
+  return Date.now() - lastTs < AUTHOR_COOLDOWN_MS;
+}
+
+function recordAutoCommentSuccess(tweetKey, authorHandle) {
+  const now = Date.now();
+  if (tweetKey) {
+    const tweetMap = loadJsonMapFromStorage(AUTO_COMMENTED_TWEETS_KEY);
+    tweetMap[tweetKey] = now;
+    saveJsonMapToStorage(AUTO_COMMENTED_TWEETS_KEY, tweetMap, 600);
+  }
+  if (authorHandle) {
+    const authorMap = loadJsonMapFromStorage(AUTO_COMMENTED_AUTHORS_KEY);
+    authorMap[authorHandle.toLowerCase()] = now;
+    saveJsonMapToStorage(AUTO_COMMENTED_AUTHORS_KEY, authorMap, 400);
+  }
+}
+
+// 获取当前登录账号自己的 @handle，避免评论或关注自己的帖子
+function detectCurrentUserHandle() {
+  const profileLink = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');
+  if (profileLink) {
+    const href = (profileLink.getAttribute("href") || "").replace(/^\/+/, "").split("/")[0];
+    if (href) return href.toLowerCase();
+  }
+  const switcher = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+  if (switcher) {
+    const m = (switcher.innerText || "").match(/@([A-Za-z0-9_]{1,15})/);
+    if (m) return m[1].toLowerCase();
+  }
+  return "";
+}
+
+// 判断是否为“蓝V互关 / 交朋友”帖子
+function isMutualFollowPost(baseTweet) {
+  const combinedText = `${baseTweet.text || ""} ${baseTweet.quotedText || ""}`.trim();
+  if (!combinedText) return false;
+  return MUTUAL_FOLLOW_REGEX.test(combinedText);
+}
+
+function setAutoCruiseStatus(text) {
+  if (!radarUI || !radarUI.autoCruiseStatus) return;
+  radarUI.autoCruiseStatus.style.display = text ? "block" : "none";
+  radarUI.autoCruiseStatus.innerText = text;
+}
+
+function updateAutoCruiseButtonUi() {
+  if (!radarUI || !radarUI.autoCruiseBtn) return;
+  const btn = radarUI.autoCruiseBtn;
+  if (autoCruiseState.running) {
+    btn.innerText = `⏹ 停止 (${autoCruiseState.completedCount}/${autoCruiseState.maxLimit})`;
+    btn.style.background = "linear-gradient(90deg, #ef4444 0%, #dc2626 100%)";
+    if (radarUI.autoCruiseModeSelect) radarUI.autoCruiseModeSelect.disabled = true;
+    if (radarUI.autoCruiseLimitSelect) radarUI.autoCruiseLimitSelect.disabled = true;
+  } else {
+    btn.innerText = "▶ 启动自动评论";
+    btn.style.background = "linear-gradient(90deg, #10b981 0%, #059669 100%)";
+    if (radarUI.autoCruiseModeSelect) radarUI.autoCruiseModeSelect.disabled = false;
+    if (radarUI.autoCruiseLimitSelect) radarUI.autoCruiseLimitSelect.disabled = false;
+  }
+}
+
+function toggleAutoCommentCruise() {
+  if (autoCruiseState.running) {
+    stopAutoCommentCruise("⏹ 已手动停止自动评论巡航");
+  } else {
+    startAutoCommentCruise();
+  }
+}
+
+function stopAutoCommentCruise(reasonText = "") {
+  autoCruiseState.running = false;
+  updateAutoCruiseButtonUi();
+  if (reasonText) {
+    setAutoCruiseStatus(reasonText);
+  }
+}
+
+// 在当前可视区域扫描并挑选下一条符合条件的候选帖子
+function findNextEligibleCandidate() {
+  const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
+  const myHandle = detectCurrentUserHandle();
+  const filterMode = radarUI?.autoCruiseModeSelect?.value || "hot_and_mutual";
+
+  for (const article of articles) {
+    // 跳过弹窗内部的推文节点
+    if (article.closest('[role="dialog"]')) continue;
+
+    // 跳过屏幕上方已经滚过去的残缺节点，只选当前视口内或下方的帖子
+    const rect = article.getBoundingClientRect();
+    if (rect.bottom < 80) continue;
+
+    const baseTweet = extractSingleTweet(article);
+    if (!baseTweet || !baseTweet.hasContent) continue;
+
+    const metrics = extractTweetMetrics(article);
+    if (metrics.isAd) continue;
+
+    const tweetKey = metrics.tweetUrl || baseTweet.signature;
+    if (autoCruiseState.sessionVisitedKeys.has(tweetKey)) continue;
+
+    // 跳过纯转帖（无原创观点）
+    const socialContextText = (
+      article.querySelector('[data-testid="socialContext"]')?.innerText || ""
+    ).trim();
+    if (/转帖|轉帖|Reposted|Retweeted/i.test(socialContextText)) {
+      autoCruiseState.sessionVisitedKeys.add(tweetKey);
+      continue;
+    }
+
+    const authorHandle = X_AI_CAPTURE.handleFromAuthorText(baseTweet.author).toLowerCase();
+    // 跳过自己的帖子
+    if (myHandle && authorHandle && authorHandle === myHandle) {
+      autoCruiseState.sessionVisitedKeys.add(tweetKey);
+      continue;
+    }
+
+    const mainText = (baseTweet.text || "").trim();
+    // 跳过敏感/哀悼帖
+    if (SENSITIVE_SKIP_REGEX.test(mainText)) {
+      autoCruiseState.sessionVisitedKeys.add(tweetKey);
+      continue;
+    }
+
+    const isMutualFollow = isMutualFollowPost(baseTweet);
+    const hasBlueV = Boolean(article.querySelector('[data-testid="icon-verified"]'));
+
+    // 字数门槛：互关交友帖至少 4 个字，普通帖至少 10 个字
+    const minChars = isMutualFollow ? 4 : 10;
+    if (mainText.length < minChars) {
+      autoCruiseState.sessionVisitedKeys.add(tweetKey);
+      continue;
+    }
+
+    // 跳过历史已自动评论过的帖子 & 处于冷却期内的同一作者
+    if (hasTweetBeenAutoCommented(tweetKey) || isAuthorInAutoCooldown(authorHandle)) {
+      autoCruiseState.sessionVisitedKeys.add(tweetKey);
+      continue;
+    }
+
+    const evaluation = evaluateTweetHotness(metrics, currentThresholdPreset);
+
+    // 根据选帖模式判定是否入选
+    let matched = false;
+    if (filterMode === "mutual_only") {
+      matched = isMutualFollow;
+    } else if (filterMode === "all_valid") {
+      matched = metrics.views < MAX_HOT_VIEWS;
+    } else {
+      // 默认 hot_and_mutual：潜力热门帖（曝光<10万且多维达标，优先24h内新帖） 或 蓝V互关交友帖
+      const isFreshEnough = metrics.ageHours === null || metrics.ageHours <= 24;
+      matched = isMutualFollow || (evaluation.isHot && isFreshEnough);
+    }
+
+    if (!matched) {
+      autoCruiseState.sessionVisitedKeys.add(tweetKey);
+      continue;
+    }
+
+    return {
+      article,
+      baseTweet,
+      metrics,
+      evaluation,
+      tweetKey,
+      authorHandle,
+      isMutualFollow,
+      hasBlueV
+    };
+  }
+
+  return null;
+}
+
+// 自动关注目标帖子作者（优先直接按钮 -> 推文右上角「...」菜单点“关注 @xxx”）
+async function tryAutoFollowAuthor(article, authorHandle) {
+  if (!article) return false;
+
+  // 1. 若卡片内本身带有未关注的 Follow 按钮，直接点击
+  const directFollowBtn = article.querySelector('[data-testid$="-follow"]');
+  if (directFollowBtn && !directFollowBtn.getAttribute("data-testid")?.endsWith("-unfollow")) {
+    directFollowBtn.click();
+    await sleepInterruptible(500);
+    return true;
+  }
+
+  // 2. 点击推文右上角「...」(caret) 菜单，在下拉项中查找「关注 @xxx / Follow @xxx」
+  const caretBtn = article.querySelector('[data-testid="caret"]');
+  if (!caretBtn) return false;
+
+  caretBtn.click();
+
+  let dropdown = null;
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 80));
+    dropdown = document.querySelector('[data-testid="Dropdown"], [role="menu"]');
+    if (dropdown) break;
+  }
+
+  if (!dropdown) return false;
+
+  const menuItems = Array.from(dropdown.querySelectorAll('[role="menuitem"]'));
+  let followItem = null;
+
+  for (const item of menuItems) {
+    const label = (item.innerText || "").replace(/\s+/g, " ").trim();
+    const isUnfollow = /取消关注|取消跟隨|Unfollow/i.test(label);
+    const isFollow =
+      !isUnfollow &&
+      (/^(关注|跟隨|Follow)\s*@/i.test(label) ||
+        (authorHandle &&
+          new RegExp(`(关注|跟隨|Follow)\\s*@?${authorHandle}`, "i").test(label)));
+    if (isFollow) {
+      followItem = item;
+      break;
+    }
+  }
+
+  if (followItem) {
+    followItem.click();
+    await sleepInterruptible(550);
+    return true;
+  }
+
+  // 如果菜单里已经是“取消关注 @xxx”（说明已关注过），关闭菜单即可
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true })
+  );
+  // 点击遮罩层兜底关闭下拉菜单
+  const backdrop =
+    dropdown.closest('[data-testid="sheetDialog"]')?.previousElementSibling || document.body;
+  if (backdrop && backdrop !== document.body) {
+    backdrop.click();
+  } else {
+    caretBtn.click();
+  }
+  await sleepInterruptible(300);
+  return false;
+}
+
+// 向后台请求 AI 生成评论（Promise 封装）
+function requestAiReplyFromBackground(payload) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        action: "GENERATE_REPLY",
+        payload
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (response && response.success && response.reply) {
+          resolve(response.reply);
+        } else {
+          reject(new Error(response?.error || "生成评论为空"));
+        }
+      }
+    );
+  });
+}
+
+// 关闭可能残留的回复弹窗，防止阻塞后续滚动
+async function closeReplyModalIfOpen() {
+  const closeBtn = document.querySelector(
+    '[role="dialog"] [data-testid="app-bar-close"], [role="dialog"] [aria-label="Close"], [role="dialog"] [aria-label="关闭"]'
+  );
+  if (closeBtn) {
+    closeBtn.click();
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+// 对单条候选帖子执行：滚动定位 -> 模拟阅读 -> (若是互关帖则自动关注) -> 点开回复 -> AI生成填入 -> 自动点发送
+async function processCandidateTweet(candidate) {
+  const { article, baseTweet, tweetKey, authorHandle, isMutualFollow } = candidate;
+  const displayAuthor = authorHandle ? `@${authorHandle}` : baseTweet.author || "博主";
+  const prevOutline = article.style.outline;
+  article.style.outline = "2px solid #10b981";
+  article.style.borderRadius = "12px";
+
+  try {
+    // 1. 滚动到屏幕中央并模拟真人阅读停留 (2.5 ~ 4.5 秒)
+    article.scrollIntoView({ behavior: "smooth", block: "center" });
+    const readWaitMs = Math.floor(2500 + Math.random() * 2000);
+    setAutoCruiseStatus(
+      `👀 正在阅读 ${displayAuthor} 的${isMutualFollow ? "【🤝互关交友帖】" : "帖子"} (${(
+        readWaitMs / 1000
+      ).toFixed(1)}s)...`
+    );
+    await sleepInterruptible(readWaitMs);
+    if (!autoCruiseState.running) return false;
+
+    // 2. 若是蓝V互关/交朋友的帖子且勾选了自动关注，先执行自动关注
+    const shouldAutoFollow = Boolean(radarUI?.autoFollowCheckbox?.checked) && isMutualFollow;
+    let didFollow = false;
+    if (shouldAutoFollow) {
+      setAutoCruiseStatus(`🤝 检测到蓝V互关交友帖，正在自动关注 ${displayAuthor}...`);
+      didFollow = await tryAutoFollowAuthor(article, authorHandle);
+      if (didFollow) {
+        autoCruiseState.followedCount += 1;
+        setAutoCruiseStatus(`✅ 已自动关注 ${displayAuthor}，准备生成互关评论...`);
+      } else {
+        setAutoCruiseStatus(`ℹ️ 已关注过 ${displayAuthor}，准备生成互关评论...`);
+      }
+      await sleepInterruptible(1100 + Math.floor(Math.random() * 600));
+      if (!autoCruiseState.running) return false;
+    }
+
+    // 3. 点击该帖底部的「回复」按钮唤起回复弹窗
+    const replyBtn = article.querySelector('[data-testid="reply"]');
+    if (!replyBtn) return false;
+
+    replyBtn.click();
+
+    let modalEditor = null;
+    for (let i = 0; i < 25; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      modalEditor = document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]');
+      if (modalEditor) break;
+    }
+
+    if (!modalEditor) {
+      setAutoCruiseStatus(`⚠️ 未能打开 ${displayAuthor} 的回复弹窗，跳过此帖...`);
+      return false;
+    }
+    if (!autoCruiseState.running) {
+      await closeReplyModalIfOpen();
+      return false;
+    }
+
+    // 4. 调用 AI 生成评论（互关帖自动走 mutual_follow 交友话术，普通帖轮换自然风格）
+    const savedStyle = getSavedStyle();
+    const chosenStyle =
+      savedStyle !== "default"
+        ? savedStyle
+        : AUTO_ROTATE_STYLES[autoCruiseState.completedCount % AUTO_ROTATE_STYLES.length];
+
+    setAutoCruiseStatus(`✍️ AI 正在为 ${displayAuthor} 生成评论...`);
+    const replyText = await requestAiReplyFromBackground({
+      style: chosenStyle,
+      isMutualFollow,
+      targetTweet: baseTweet,
+      threadContext: []
+    });
+
+    if (!autoCruiseState.running) {
+      await closeReplyModalIfOpen();
+      return false;
+    }
+
+    // 5. 将生成的评论写入回复框
+    await insertTextToDraftJs(modalEditor, replyText);
+
+    // 6. 模拟真人检查停顿 (2.0 ~ 3.5 秒) 后，自动点击弹窗右下角「回复」发送按钮
+    const reviewMs = Math.floor(2000 + Math.random() * 1500);
+    setAutoCruiseStatus(`🚀 已填入评论：「${replyText.slice(0, 26)}...」，准备自动发送...`);
+    await sleepInterruptible(reviewMs);
+    if (!autoCruiseState.running) {
+      await closeReplyModalIfOpen();
+      return false;
+    }
+
+    const modal = modalEditor.closest('[role="dialog"]');
+    const sendBtn = modal
+      ? modal.querySelector('[data-testid="tweetButton"]')
+      : document.querySelector('[role="dialog"] [data-testid="tweetButton"]');
+
+    if (!sendBtn || sendBtn.disabled || sendBtn.getAttribute("aria-disabled") === "true") {
+      setAutoCruiseStatus(`⚠️ 发送按钮未就绪，关闭弹窗跳过此帖...`);
+      await closeReplyModalIfOpen();
+      return false;
+    }
+
+    sendBtn.click();
+
+    // 7. 等待回复弹窗自动关闭，确认发送成功
+    let modalClosed = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (!document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]')) {
+        modalClosed = true;
+        break;
+      }
+    }
+
+    if (!modalClosed) {
+      await closeReplyModalIfOpen();
+      return false;
+    }
+
+    // 记录已完成去重与作者冷却
+    recordAutoCommentSuccess(tweetKey, authorHandle);
+    return true;
+  } finally {
+    article.style.outline = prevOutline;
+  }
+}
+
+// 启动全自动浏览 + 自动关注 + 自动评论主循环
+async function startAutoCommentCruise() {
+  if (autoCruiseState.running) return;
+
+  // 若已有打开的弹窗，先关闭以免干扰
+  await closeReplyModalIfOpen();
+
+  autoCruiseState.running = true;
+  autoCruiseState.completedCount = 0;
+  autoCruiseState.followedCount = 0;
+  autoCruiseState.consecutiveErrors = 0;
+  autoCruiseState.maxLimit = parseInt(radarUI?.autoCruiseLimitSelect?.value || "9", 10) || 9;
+
+  updateAutoCruiseButtonUi();
+  setAutoCruiseStatus("🔍 已启动全自动评论巡航，正在扫描页面帖子...");
+
+  let emptyScrollCount = 0;
+  const maxEmptyScrolls = 15;
+
+  while (
+    autoCruiseState.running &&
+    autoCruiseState.completedCount < autoCruiseState.maxLimit
+  ) {
+    scanVisibleTweets();
+    const candidate = findNextEligibleCandidate();
+
+    if (!candidate) {
+      emptyScrollCount += 1;
+      if (emptyScrollCount > maxEmptyScrolls) {
+        stopAutoCommentCruise(
+          `⏹ 连续滚动 ${maxEmptyScrolls} 屏未找到更多符合条件的帖子，已自动停止（本轮已评 ${autoCruiseState.completedCount} 条，关注 ${autoCruiseState.followedCount} 人）`
+        );
+        return;
+      }
+
+      setAutoCruiseStatus(
+        `🔍 当前屏无新目标帖，正在自动向下浏览寻帖 (${emptyScrollCount}/${maxEmptyScrolls})...`
+      );
+      window.scrollBy({
+        top: Math.floor(window.innerHeight * (0.7 + Math.random() * 0.25)),
+        behavior: "smooth"
+      });
+      await sleepInterruptible(Math.floor(1800 + Math.random() * 900));
+      continue;
+    }
+
+    emptyScrollCount = 0;
+    autoCruiseState.sessionVisitedKeys.add(candidate.tweetKey);
+
+    try {
+      const success = await processCandidateTweet(candidate);
+      if (!autoCruiseState.running) break;
+
+      if (success) {
+        autoCruiseState.completedCount += 1;
+        autoCruiseState.consecutiveErrors = 0;
+        updateAutoCruiseButtonUi();
+
+        // 判断是否已达到本轮设定的总上限
+        if (autoCruiseState.completedCount >= autoCruiseState.maxLimit) {
+          stopAutoCommentCruise(
+            `🎉 本轮自动巡航完成！共自动评论 ${autoCruiseState.completedCount} 条，自动关注 ${autoCruiseState.followedCount} 人`
+          );
+          return;
+        }
+
+        // 核心节奏控制：每评论满 3 条后，随机休息 1 ~ 2 分钟（60 ~ 120 秒）
+        if (autoCruiseState.completedCount % 3 === 0) {
+          const restSeconds = Math.floor(60 + Math.random() * 61);
+          for (let rem = restSeconds; rem > 0; rem--) {
+            if (!autoCruiseState.running) return;
+            setAutoCruiseStatus(
+              `☕ 已满 3 条（总进度 ${autoCruiseState.completedCount}/${autoCruiseState.maxLimit}，已关注 ${autoCruiseState.followedCount} 人），休息冷却中... 剩余 ${rem} 秒`
+            );
+            await sleepInterruptible(1000);
+          }
+        } else {
+          // 同一组 3 条内部的自然过渡间隔（6 ~ 11 秒随机）
+          const shortGapSeconds = Math.floor(6 + Math.random() * 6);
+          for (let rem = shortGapSeconds; rem > 0; rem--) {
+            if (!autoCruiseState.running) return;
+            setAutoCruiseStatus(
+              `✅ 已评 ${autoCruiseState.completedCount}/${autoCruiseState.maxLimit} 条（已关注 ${autoCruiseState.followedCount} 人），${rem} 秒后继续下一条...`
+            );
+            await sleepInterruptible(1000);
+          }
+        }
+      } else {
+        await sleepInterruptible(1200);
+      }
+    } catch (err) {
+      autoCruiseState.consecutiveErrors += 1;
+      await closeReplyModalIfOpen();
+
+      if (autoCruiseState.consecutiveErrors >= 3) {
+        stopAutoCommentCruise(`❌ 连续遇到异常（${err.message}），已触发安全熔断停止`);
+        return;
+      }
+      setAutoCruiseStatus(`⚠️ 处理出错（${err.message}），稍后继续下一条...`);
+      await sleepInterruptible(2500);
+    }
+  }
 }
