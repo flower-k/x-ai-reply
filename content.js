@@ -1920,10 +1920,16 @@ const SENSITIVE_SKIP_REGEX = /去世|逝世|哀悼|讣告|遇难|安息|\bRIP\b/
 // 普通热门帖自动评论时轮换使用的多样化风格（避免连续评论句式单一）
 const AUTO_ROTATE_STYLES = ["default", "agree", "question", "insight", "humor"];
 
+// 关注节奏：连续关注满 10 人后强制长休 10 ~ 15 分钟
+const FOLLOW_REST_EVERY = 10;
+const FOLLOW_REST_MIN_SECONDS = 10 * 60;
+const FOLLOW_REST_MAX_SECONDS = 15 * 60;
+
 const autoCruiseState = {
   running: false,
   completedCount: 0,
   followedCount: 0,
+  followsSinceRest: 0,
   maxLimit: 9,
   consecutiveErrors: 0,
   sessionVisitedKeys: new Set()
@@ -2273,6 +2279,7 @@ async function processCandidateTweet(candidate) {
       didFollow = await tryAutoFollowAuthor(article, authorHandle);
       if (didFollow) {
         autoCruiseState.followedCount += 1;
+        autoCruiseState.followsSinceRest += 1;
         setAutoCruiseStatus(`✅ 已自动关注 ${displayAuthor}，准备生成互关评论...`);
       } else {
         setAutoCruiseStatus(`ℹ️ 已关注过 ${displayAuthor}，准备生成互关评论...`);
@@ -2323,10 +2330,18 @@ async function processCandidateTweet(candidate) {
       return false;
     }
 
-    // 5. 将生成的评论写入回复框
-    await insertTextToDraftJs(modalEditor, replyText);
+    // 5. 发送前最后一道闸：含备选/说明/换行等不合格输出的回复一律不发送
+    const guard = self.X_AI_REPLY_GUARD.check(replyText);
+    if (!guard.ok) {
+      setAutoCruiseStatus(`⚠️ AI 输出不合格（${guard.reason}），已放弃发送此条...`);
+      await closeReplyModalIfOpen();
+      return false;
+    }
 
-    // 6. 模拟真人检查停顿 (2.0 ~ 3.5 秒) 后，自动点击弹窗右下角「回复」发送按钮
+    // 6. 将生成的评论写入回复框
+    await insertTextToDraftJs(modalEditor, guard.text);
+
+    // 7. 模拟真人检查停顿 (2.0 ~ 3.5 秒) 后，自动点击弹窗右下角「回复」发送按钮
     const reviewMs = Math.floor(2000 + Math.random() * 1500);
     setAutoCruiseStatus(`🚀 已填入评论：「${replyText.slice(0, 26)}...」，准备自动发送...`);
     await sleepInterruptible(reviewMs);
@@ -2348,7 +2363,7 @@ async function processCandidateTweet(candidate) {
 
     sendBtn.click();
 
-    // 7. 等待回复弹窗自动关闭，确认发送成功
+    // 8. 等待回复弹窗自动关闭，确认发送成功
     let modalClosed = false;
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 150));
@@ -2381,6 +2396,7 @@ async function startAutoCommentCruise() {
   autoCruiseState.running = true;
   autoCruiseState.completedCount = 0;
   autoCruiseState.followedCount = 0;
+  autoCruiseState.followsSinceRest = 0;
   autoCruiseState.consecutiveErrors = 0;
   autoCruiseState.maxLimit = parseInt(radarUI?.autoCruiseLimitSelect?.value || "9", 10) || 9;
 
@@ -2436,7 +2452,29 @@ async function startAutoCommentCruise() {
           );
           return;
         }
+      }
 
+      // 关注节奏控制：连续关注满 10 人后，强制休息 10 ~ 15 分钟再继续。
+      // 放在评论成功分支之外：即使这条评论失败，已经发生的关注也要计入并触发休息。
+      if (autoCruiseState.followsSinceRest >= FOLLOW_REST_EVERY) {
+        autoCruiseState.followsSinceRest = 0;
+        const restSeconds = Math.floor(
+          FOLLOW_REST_MIN_SECONDS +
+            Math.random() * (FOLLOW_REST_MAX_SECONDS - FOLLOW_REST_MIN_SECONDS + 1)
+        );
+        for (let rem = restSeconds; rem > 0; rem--) {
+          if (!autoCruiseState.running) return;
+          setAutoCruiseStatus(
+            `☕ 已连续关注 ${FOLLOW_REST_EVERY} 人（累计 ${autoCruiseState.followedCount} 人），休息 ${Math.ceil(
+              restSeconds / 60
+            )} 分钟后再继续... 剩余 ${rem} 秒`
+          );
+          await sleepInterruptible(1000);
+        }
+        continue;
+      }
+
+      if (success) {
         // 核心节奏控制：每评论满 3 条后，随机休息 1 ~ 2 分钟（60 ~ 120 秒）
         if (autoCruiseState.completedCount % 3 === 0) {
           const restSeconds = Math.floor(60 + Math.random() * 61);

@@ -5,6 +5,9 @@ try {
   console.error("[X AI 评论助手] 缺少 config.js：请复制 config.example.js 为 config.js，填入 API Key 后刷新插件");
   throw e;
 }
+// 评论正文校验模块（与 content.js 共用）：只输出一条正文，挡住备选/说明/多段
+importScripts("reply-guard.js");
+
 const { API_URL, API_KEY, MODEL_NAME } = self.AI_CONFIG;
 
 // 缓存自动探测到的可用接口与模型名称（避免每次重复探测）
@@ -30,7 +33,7 @@ const STYLE_PROMPTS = {
   english:
     "Write a short, natural, casual English reply (under 20 words) with authentic tech Twitter / indie hacker vibes. No corporate tone, no period at the end.",
   mutual_follow:
-    "这是一条蓝V互关/交朋友的帖子，你已经关注了作者。请写一条自然、真诚、接地气的互关交友评论（中文20字以内 / 英文15词以内），表达“已关/交个朋友/常互动”之意，如果原帖提到了作者的领域或目标（如AI、独立开发、出海、冲万粉等），可以顺带自然呼应一句，像真人博主打招呼，不要死板复读。"
+    "这是一条蓝V互关/交朋友的帖子，你已经关注了作者。请写一条自然、真诚、接地气的互关交友评论（中文20字以内 / 英文15词以内），表达“已关/交个朋友/常互动”之意，如果原帖提到了作者的领域或目标（如AI、独立开发、出海、冲万粉等），可以顺带自然呼应一句，像真人博主打招呼，不要死板复读。只输出这一条评论本身，不要给备选版本，不要加任何括号说明或解释。"
 };
 
 // 二创改写时，模型输出风格画像与正文之间的分隔符
@@ -154,7 +157,8 @@ async function generateReply(payload = {}) {
     "你是一个活跃在 X (Twitter) 上的独立开发者。",
     styleInstruction,
     languageRule,
-    "通用要求：不要用客服腔调或说教口吻，不要用句号结尾，不要加引号包裹回复内容，直接输出评论正文。"
+    "通用要求：不要用客服腔调或说教口吻，不要用句号结尾，不要加引号包裹回复内容，直接输出评论正文。",
+    "【输出格式（最高优先级）】只输出一条可直接发布的评论正文：禁止提供两个及以上版本，禁止出现“或者”“另一版”“备选”等字样；禁止任何括号补充、语气说明、解释、标题或字数统计；禁止换行分段；除评论正文本身外不得出现任何其他文字。"
   ].join("\n");
 
   // 构建上下文文本（支持楼中楼多层对话链 + 媒体描述）
@@ -217,7 +221,28 @@ async function generateReply(payload = {}) {
     }
   ];
 
-  return executeChatMessages(messages);
+  return generateValidatedReply(messages);
+}
+
+// 评论正文闸门：不合格输出把原因回传模型重试一次，仍不合格就报错阻止发送
+async function generateValidatedReply(messages) {
+  const raw = await executeChatMessages(messages);
+  const first = self.X_AI_REPLY_GUARD.check(raw);
+  if (first.ok) return first.text;
+
+  const retryMessages = [
+    ...messages,
+    { role: "assistant", content: raw.slice(0, 600) },
+    {
+      role: "user",
+      content: `上面的输出不合格（${first.reason}）。请只输出一条可直接发布的评论正文，不要备选版本、不要括号说明、不要解释、不要换行。`
+    }
+  ];
+  const retryRaw = await executeChatMessages(retryMessages);
+  const second = self.X_AI_REPLY_GUARD.check(retryRaw);
+  if (second.ok) return second.text;
+
+  throw new Error(`模型连续两次输出不合格内容（${second.reason}），已阻止发送，请重试`);
 }
 
 // 爆款推文 AI 二创改写：先拆解原帖创作风格，再用该风格仿写（不带任何预设账号腔）
@@ -359,7 +384,9 @@ async function sendCompletionRequest(url, model, messages) {
   const requestBody = {
     model,
     messages,
-    max_tokens: 2048
+    max_tokens: 2048,
+    // 评论是短文案任务，压低温度减少模型“给两版”的发挥空间
+    temperature: 0.6
   };
 
   if (model.startsWith("kimi-k3")) {
@@ -378,9 +405,15 @@ async function sendCompletionRequest(url, model, messages) {
   });
 
   // 如果部分兼容模型不支持 reasoning_effort / thinking 参数返回 400，自动退回基础参数重试
-  if (resp.status === 400 && (requestBody.reasoning_effort || requestBody.thinking)) {
+  if (
+    resp.status === 400 &&
+    (requestBody.reasoning_effort ||
+      requestBody.thinking ||
+      requestBody.temperature !== undefined)
+  ) {
     delete requestBody.reasoning_effort;
     delete requestBody.thinking;
+    delete requestBody.temperature;
     resp = await fetch(url, {
       method: "POST",
       headers: {

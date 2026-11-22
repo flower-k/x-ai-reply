@@ -26,7 +26,7 @@
     },
     {
       "matches": ["https://x.com/*"],
-      "js": ["capture.js", "content.js"],
+      "js": ["reply-guard.js", "capture.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
