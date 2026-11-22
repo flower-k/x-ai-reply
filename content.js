@@ -1184,7 +1184,7 @@ function ensureHotRadarMounted() {
     font-weight: 800;
     color: #38bdf8;
   `;
-  autoCruiseTitle.innerText = "🤖 全自动浏览评论巡航（每3条休1~2分钟）";
+  autoCruiseTitle.innerText = "🤖 全自动浏览评论巡航（每3条休20~30秒）";
 
   const autoFollowLabel = document.createElement("label");
   autoFollowLabel.style.cssText = `
@@ -1903,7 +1903,7 @@ function updateCaptureUi() {
 }
 
 // ============================================================================
-// 模块四：全自动浏览帖子 + 蓝V互关交友自动关注 + 全自动评论巡航（每3条休息1~2分钟）
+// 模块四：全自动浏览帖子 + 蓝V互关交友自动关注 + 全自动评论巡航（每3条休息20~30秒）
 // ============================================================================
 
 const AUTO_COMMENTED_TWEETS_KEY = "x_ai_auto_commented_tweets";
@@ -2475,9 +2475,9 @@ async function startAutoCommentCruise() {
       }
 
       if (success) {
-        // 核心节奏控制：每评论满 3 条后，随机休息 1 ~ 2 分钟（60 ~ 120 秒）
+        // 核心节奏控制：每评论满 3 条后，随机休息 20 ~ 30 秒
         if (autoCruiseState.completedCount % 3 === 0) {
-          const restSeconds = Math.floor(60 + Math.random() * 61);
+          const restSeconds = Math.floor(20 + Math.random() * 11);
           for (let rem = restSeconds; rem > 0; rem--) {
             if (!autoCruiseState.running) return;
             setAutoCruiseStatus(
