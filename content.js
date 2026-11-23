@@ -1234,6 +1234,8 @@ function ensureHotRadarMounted() {
     const o = document.createElement("option");
     o.value = opt.value;
     o.innerText = opt.text;
+    // 默认只评互关/交友帖，避免普通时间线被无差别评论
+    if (opt.value === "mutual_only") o.selected = true;
     autoCruiseModeSelect.appendChild(o);
   });
 
@@ -1257,7 +1259,7 @@ function ensureHotRadarMounted() {
     const o = document.createElement("option");
     o.value = opt.value;
     o.innerText = opt.text;
-    if (opt.value === "9") o.selected = true;
+    if (opt.value === "30") o.selected = true;
     autoCruiseLimitSelect.appendChild(o);
   });
 
@@ -1912,7 +1914,7 @@ const AUTHOR_COOLDOWN_MS = 12 * 3600 * 1000; // 同一作者 12 小时内最多�
 
 // 识别“蓝V互关 / 交朋友 / 有粉必回”类帖子的特征词
 const MUTUAL_FOLLOW_REGEX =
-  /互关|互粉|交个朋友|交朋友|浇朋友|浇个朋友|有粉必回|必回关|秒回关|回关|互赞|互评|抱团|取暖|认识一下|蓝[vV]互|冲\s*\d+\s*[粉kK万]|破千|破万|涨粉|活跃号|铁粉|连接一下|找组织|\b(f4f|follow\s*back|follow\s*for\s*follow|let'?s\s*connect|mutuals)\b/i;
+  /互关|互粉|交个朋友|交朋友|浇朋友|浇个朋友|有粉必回|必回关|秒回关|回关|互赞|互评|抱团|取暖|认识一下|蓝[vV]|蓝[vV]互|冲\s*\d+\s*[粉kK万]|破千|破万|涨粉|活跃号|铁粉|连接一下|找组织|\b(f4f|follow\s*back|follow\s*for\s*follow|let'?s\s*connect|mutuals)\b/i;
 
 // 敏感/哀悼类内容自动跳过，避免误评翻车
 const SENSITIVE_SKIP_REGEX = /去世|逝世|哀悼|讣告|遇难|安息|\bRIP\b/i;
@@ -1930,7 +1932,7 @@ const autoCruiseState = {
   completedCount: 0,
   followedCount: 0,
   followsSinceRest: 0,
-  maxLimit: 9,
+  maxLimit: 30,
   consecutiveErrors: 0,
   sessionVisitedKeys: new Set()
 };
@@ -2059,7 +2061,7 @@ function stopAutoCommentCruise(reasonText = "") {
 function findNextEligibleCandidate() {
   const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
   const myHandle = detectCurrentUserHandle();
-  const filterMode = radarUI?.autoCruiseModeSelect?.value || "hot_and_mutual";
+  const filterMode = radarUI?.autoCruiseModeSelect?.value || "mutual_only";
 
   for (const article of articles) {
     // 跳过弹窗内部的推文节点
@@ -2152,20 +2154,21 @@ function findNextEligibleCandidate() {
 }
 
 // 自动关注目标帖子作者（优先直接按钮 -> 推文右上角「...」菜单点“关注 @xxx”）
+// 返回："followed"=本次关注成功 / "already"=本来就已关注 / "failed"=没找到入口或操作失败
 async function tryAutoFollowAuthor(article, authorHandle) {
-  if (!article) return false;
+  if (!article) return "failed";
 
   // 1. 若卡片内本身带有未关注的 Follow 按钮，直接点击
   const directFollowBtn = article.querySelector('[data-testid$="-follow"]');
   if (directFollowBtn && !directFollowBtn.getAttribute("data-testid")?.endsWith("-unfollow")) {
     directFollowBtn.click();
     await sleepInterruptible(500);
-    return true;
+    return "followed";
   }
 
   // 2. 点击推文右上角「...」(caret) 菜单，在下拉项中查找「关注 @xxx / Follow @xxx」
   const caretBtn = article.querySelector('[data-testid="caret"]');
-  if (!caretBtn) return false;
+  if (!caretBtn) return "failed";
 
   caretBtn.click();
 
@@ -2176,19 +2179,23 @@ async function tryAutoFollowAuthor(article, authorHandle) {
     if (dropdown) break;
   }
 
-  if (!dropdown) return false;
+  if (!dropdown) return "failed";
 
   const menuItems = Array.from(dropdown.querySelectorAll('[role="menuitem"]'));
   let followItem = null;
+  let alreadyFollowing = false;
 
   for (const item of menuItems) {
     const label = (item.innerText || "").replace(/\s+/g, " ").trim();
-    const isUnfollow = /取消关注|取消跟隨|Unfollow/i.test(label);
+    // 明确看到“取消关注”才判定为已关注过，避免菜单没渲染完被误判
+    if (/取消关注|取消跟隨|Unfollow/i.test(label)) {
+      alreadyFollowing = true;
+      continue;
+    }
     const isFollow =
-      !isUnfollow &&
-      (/^(关注|跟隨|Follow)\s*@/i.test(label) ||
-        (authorHandle &&
-          new RegExp(`(关注|跟隨|Follow)\\s*@?${authorHandle}`, "i").test(label)));
+      /^(关注|跟隨|Follow)\s*@/i.test(label) ||
+      (authorHandle &&
+        new RegExp(`(关注|跟隨|Follow)\\s*@?${authorHandle}`, "i").test(label));
     if (isFollow) {
       followItem = item;
       break;
@@ -2198,14 +2205,13 @@ async function tryAutoFollowAuthor(article, authorHandle) {
   if (followItem) {
     followItem.click();
     await sleepInterruptible(550);
-    return true;
+    return "followed";
   }
 
-  // 如果菜单里已经是“取消关注 @xxx”（说明已关注过），关闭菜单即可
+  // 关闭下拉菜单（Escape + 点遮罩兜底）
   document.dispatchEvent(
     new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true })
   );
-  // 点击遮罩层兜底关闭下拉菜单
   const backdrop =
     dropdown.closest('[data-testid="sheetDialog"]')?.previousElementSibling || document.body;
   if (backdrop && backdrop !== document.body) {
@@ -2214,7 +2220,7 @@ async function tryAutoFollowAuthor(article, authorHandle) {
     caretBtn.click();
   }
   await sleepInterruptible(300);
-  return false;
+  return alreadyFollowing ? "already" : "failed";
 }
 
 // 向后台请求 AI 生成评论（Promise 封装）
@@ -2251,7 +2257,7 @@ async function closeReplyModalIfOpen() {
   }
 }
 
-// 对单条候选帖子执行：滚动定位 -> 模拟阅读 -> (若是互关帖则自动关注) -> 点开回复 -> AI生成填入 -> 自动点发送
+// 对单条候选帖子执行：滚动定位 -> 模拟阅读 -> (互关帖先关注，关注失败就跳过) -> 点开回复 -> AI生成填入 -> 自动点发送
 async function processCandidateTweet(candidate) {
   const { article, baseTweet, tweetKey, authorHandle, isMutualFollow } = candidate;
   const displayAuthor = authorHandle ? `@${authorHandle}` : baseTweet.author || "博主";
@@ -2271,18 +2277,22 @@ async function processCandidateTweet(candidate) {
     await sleepInterruptible(readWaitMs);
     if (!autoCruiseState.running) return false;
 
-    // 2. 若是蓝V互关/交朋友的帖子且勾选了自动关注，先执行自动关注
+    // 2. 若是蓝V互关/交朋友的帖子且勾选了自动关注，先执行自动关注。
+    //    关注失败（找不到入口、菜单异常、点击没生效）就直接跳过，不生成也不发送评论。
     const shouldAutoFollow = Boolean(radarUI?.autoFollowCheckbox?.checked) && isMutualFollow;
-    let didFollow = false;
     if (shouldAutoFollow) {
       setAutoCruiseStatus(`🤝 检测到蓝V互关交友帖，正在自动关注 ${displayAuthor}...`);
-      didFollow = await tryAutoFollowAuthor(article, authorHandle);
-      if (didFollow) {
+      const followResult = await tryAutoFollowAuthor(article, authorHandle);
+      if (followResult === "followed") {
         autoCruiseState.followedCount += 1;
         autoCruiseState.followsSinceRest += 1;
         setAutoCruiseStatus(`✅ 已自动关注 ${displayAuthor}，准备生成互关评论...`);
-      } else {
+      } else if (followResult === "already") {
         setAutoCruiseStatus(`ℹ️ 已关注过 ${displayAuthor}，准备生成互关评论...`);
+      } else {
+        setAutoCruiseStatus(`⚠️ 关注 ${displayAuthor} 失败，跳过此帖不评论...`);
+        await sleepInterruptible(1200);
+        return false;
       }
       await sleepInterruptible(1100 + Math.floor(Math.random() * 600));
       if (!autoCruiseState.running) return false;
@@ -2398,7 +2408,7 @@ async function startAutoCommentCruise() {
   autoCruiseState.followedCount = 0;
   autoCruiseState.followsSinceRest = 0;
   autoCruiseState.consecutiveErrors = 0;
-  autoCruiseState.maxLimit = parseInt(radarUI?.autoCruiseLimitSelect?.value || "9", 10) || 9;
+  autoCruiseState.maxLimit = parseInt(radarUI?.autoCruiseLimitSelect?.value || "30", 10) || 30;
 
   updateAutoCruiseButtonUi();
   setAutoCruiseStatus("🔍 已启动全自动评论巡航，正在扫描页面帖子...");
