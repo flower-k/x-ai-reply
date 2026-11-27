@@ -73,6 +73,54 @@ const X_AI_FULLTEXT = (() => {
     return out;
   }
 
+  // 深度遍历一次响应，提取用户关注状态（screen_name -> following 布尔值）
+  function extractUserFollowEntries(root) {
+    const out = [];
+    if (!root || typeof root !== "object") return out;
+
+    const visited = new Set();
+    const stack = [root];
+
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node || typeof node !== "object" || visited.has(node)) continue;
+      visited.add(node);
+
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) stack.push(node[i]);
+        continue;
+      }
+
+      const screenName =
+        (node.core && typeof node.core.screen_name === "string" && node.core.screen_name) ||
+        (node.legacy && typeof node.legacy.screen_name === "string" && node.legacy.screen_name) ||
+        "";
+
+      if (screenName) {
+        let following = null;
+        if (
+          node.relationship_perspectives &&
+          typeof node.relationship_perspectives.following === "boolean"
+        ) {
+          following = node.relationship_perspectives.following;
+        } else if (node.legacy && typeof node.legacy.following === "boolean") {
+          following = node.legacy.following;
+        }
+        if (typeof following === "boolean") {
+          out.push({ handle: screenName.toLowerCase(), following });
+        }
+      }
+
+      const keys = Object.keys(node);
+      for (let i = 0; i < keys.length; i++) {
+        const child = node[keys[i]];
+        if (child && typeof child === "object") stack.push(child);
+      }
+    }
+
+    return out;
+  }
+
   function urlOfRequest(input) {
     if (typeof input === "string") return input;
     if (input && typeof input.url === "string") return input.url;
@@ -81,6 +129,7 @@ const X_AI_FULLTEXT = (() => {
 
   function makeBroadcaster(win) {
     const knownIds = new Set();
+    const knownFollowMap = new Map();
 
     const broadcast = (entries) => {
       const fresh = entries.filter((entry) => !knownIds.has(entry.id));
@@ -93,6 +142,23 @@ const X_AI_FULLTEXT = (() => {
       }
     };
 
+    const broadcastFollows = (userEntries) => {
+      if (!Array.isArray(userEntries) || userEntries.length === 0) return;
+      const fresh = [];
+      for (const item of userEntries) {
+        if (!item || !item.handle) continue;
+        if (knownFollowMap.get(item.handle) === item.following) continue;
+        knownFollowMap.set(item.handle, item.following);
+        fresh.push(item);
+      }
+      if (fresh.length === 0) return;
+      try {
+        win.postMessage({ __xAiFollowStatus: "user-follow", users: fresh }, "*");
+      } catch {
+        // 忽略跨世界通信异常
+      }
+    };
+
     const emitFromText = (body) => {
       if (typeof body !== "string" || body.length === 0 || body.length > MAX_BODY_TEXT) return;
       let payload;
@@ -102,6 +168,7 @@ const X_AI_FULLTEXT = (() => {
         return;
       }
       broadcast(extractNoteTextEntries(payload));
+      broadcastFollows(extractUserFollowEntries(payload));
     };
 
     return { broadcast, emitFromText };

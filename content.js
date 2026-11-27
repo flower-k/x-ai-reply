@@ -13,15 +13,30 @@ let lastClickedReplyChain = [];
 
 // intercept.js（MAIN world）从 X 自己的 GraphQL 响应里捞出来的长帖全文：推文 id -> 完整正文
 const noteTweetTexts = new Map();
+// intercept.js（MAIN world）从 GraphQL 响应里提取的作者关注状态：handle (小写) -> boolean (true=已关注, false=未关注)
+const authorFollowStatusMap = new Map();
 
 window.addEventListener("message", (event) => {
   if (event.origin !== "https://x.com") return;
   const data = event.data;
-  if (!data || data.__xAiFullText !== "note-tweet" || !Array.isArray(data.entries)) return;
+  if (!data) return;
 
-  data.entries.forEach((entry) => {
-    if (entry && entry.id && entry.text) noteTweetTexts.set(entry.id, entry.text);
-  });
+  if (data.__xAiFullText === "note-tweet" && Array.isArray(data.entries)) {
+    data.entries.forEach((entry) => {
+      if (entry && entry.id && entry.text) noteTweetTexts.set(entry.id, entry.text);
+    });
+  }
+
+  if (data.__xAiFollowStatus === "user-follow" && Array.isArray(data.users)) {
+    data.users.forEach((u) => {
+      if (u && u.handle && typeof u.following === "boolean") {
+        authorFollowStatusMap.set(u.handle.toLowerCase(), u.following);
+      }
+    });
+    if (typeof refreshFirstTweetBadgeIfMatched === "function") {
+      refreshFirstTweetBadgeIfMatched();
+    }
+  }
 });
 
 // 折叠的长帖 DOM 里只有「显示更多」之前那截，正文一律以接口全文为准
@@ -756,6 +771,303 @@ function scanVisibleTweets() {
   if (poolUpdated) {
     updateRadarBadgeAndList();
   }
+
+  // 每次刷新页面后，自动检测并在第一条推文作者旁标记“是否已关注”
+  ensureFirstTweetFollowBadgeMarked(articles);
+}
+
+// ============================================================================
+// 首帖作者关注状态检测与标记（每次刷新页面自动标记第一条推文作者是否已关注）
+// ============================================================================
+const firstTweetBadgeState = {
+  pathname: "",
+  tweetKey: "",
+  authorHandle: "",
+  status: "", // "pending" | "following" | "not_following" | "self" | "unknown"
+  probing: false,
+  probeAttempts: 0
+};
+
+function renderFirstTweetFollowBadge(article, status, authorHandle) {
+  if (!article) return;
+  const userNameEl = article.querySelector('[data-testid="User-Name"]');
+  if (!userNameEl) return;
+
+  let badge = userNameEl.querySelector(".x-ai-first-tweet-follow-badge");
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.className = "x-ai-first-tweet-follow-badge";
+    badge.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (badge.dataset.followStatus !== "not_following") return;
+      badge.innerText = "⏳ 正在关注...";
+      const res = await tryAutoFollowAuthor(article, authorHandle);
+      if (res === "followed" || res === "already") {
+        if (authorHandle) authorFollowStatusMap.set(authorHandle.toLowerCase(), true);
+        firstTweetBadgeState.status = "following";
+        renderFirstTweetFollowBadge(article, "following", authorHandle);
+      } else {
+        renderFirstTweetFollowBadge(article, "not_following", authorHandle);
+      }
+    });
+    userNameEl.appendChild(badge);
+  }
+
+  badge.dataset.followStatus = status;
+
+  const baseCss = `
+    display: inline-flex;
+    align-items: center;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: middle;
+  `;
+
+  if (status === "following") {
+    badge.innerText = "✅ 已关注该作者";
+    badge.title = `你已经关注了首帖作者 ${authorHandle ? "@" + authorHandle : ""}`;
+    badge.style.cssText =
+      baseCss +
+      "border: 1px solid #10b981; background: rgba(16, 185, 129, 0.16); color: #10b981;";
+  } else if (status === "not_following") {
+    badge.innerText = "➕ 未关注该作者";
+    badge.title = `你尚未关注首帖作者 ${
+      authorHandle ? "@" + authorHandle : ""
+    }（点击可直接关注）`;
+    badge.style.cssText =
+      baseCss +
+      "border: 1px solid #f97316; background: rgba(249, 115, 22, 0.16); color: #f97316; cursor: pointer;";
+  } else if (status === "self") {
+    badge.innerText = "👤 我自己的推文";
+    badge.title = "这是你当前登录账号自己的推文";
+    badge.style.cssText =
+      baseCss +
+      "border: 1px solid #1d9bf0; background: rgba(29, 155, 240, 0.16); color: #1d9bf0;";
+  } else if (status === "pending") {
+    badge.innerText = "⏳ 检测是否已关注...";
+    badge.title = "正在检测你是否已关注第一条推文的作者";
+    badge.style.cssText =
+      baseCss +
+      "border: 1px solid rgba(148, 163, 184, 0.45); background: rgba(148, 163, 184, 0.12); color: #94a3b8;";
+  } else {
+    badge.innerText = "❔ 关注状态未知";
+    badge.title = "未能识别该作者的关注状态";
+    badge.style.cssText =
+      baseCss +
+      "border: 1px solid rgba(148, 163, 184, 0.35); background: transparent; color: #71767b;";
+  }
+}
+
+// 静默探测单条推文作者是否已关注（通过临时隐藏下拉菜单读取「关注/取消关注」项，无闪烁）
+async function silentProbeFollowStatusViaCaret(article, authorHandle) {
+  if (!article) return null;
+
+  // 若页面当前已有用户打开的弹窗或菜单，不抢焦点
+  if (
+    document.querySelector('[role="dialog"]') ||
+    document.querySelector('[data-testid="Dropdown"], [role="menu"]')
+  ) {
+    return null;
+  }
+
+  // 1. 先看卡片或主页头部是否直接有 follow / unfollow 按钮
+  if (article.querySelector('[data-testid$="-unfollow"]')) return true;
+  const directFollow = article.querySelector('[data-testid$="-follow"]');
+  if (directFollow && !directFollow.getAttribute("data-testid")?.endsWith("-unfollow")) {
+    return false;
+  }
+
+  const caretBtn = article.querySelector('[data-testid="caret"]');
+  if (!caretBtn) return null;
+
+  const styleEl = document.createElement("style");
+  styleEl.id = "x-ai-silent-probe-style";
+  styleEl.textContent = `
+    [data-testid="Dropdown"], [role="menu"], [data-testid="sheetDialog"] {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      transition: none !important;
+    }
+  `;
+  document.head.appendChild(styleEl);
+
+  let detected = null;
+  try {
+    caretBtn.click();
+
+    let dropdown = null;
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 35));
+      dropdown = document.querySelector('[data-testid="Dropdown"], [role="menu"]');
+      if (dropdown && dropdown.querySelector('[role="menuitem"]')) break;
+    }
+
+    if (dropdown) {
+      const items = Array.from(dropdown.querySelectorAll('[role="menuitem"]'));
+      for (const item of items) {
+        const label = (item.innerText || "").replace(/\s+/g, " ").trim();
+        if (/取消关注|取消跟隨|Unfollow/i.test(label)) {
+          detected = true;
+          break;
+        }
+        const isFollow =
+          /^(关注|跟隨|Follow)\s*@/i.test(label) ||
+          (authorHandle &&
+            new RegExp(`(关注|跟隨|Follow)\\s*@?${authorHandle}`, "i").test(label));
+        if (isFollow) {
+          detected = false;
+          break;
+        }
+      }
+
+      // 立即关闭菜单
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          code: "Escape",
+          keyCode: 27,
+          bubbles: true
+        })
+      );
+      const backdrop =
+        dropdown.closest('[data-testid="sheetDialog"]')?.previousElementSibling || null;
+      if (backdrop) {
+        backdrop.click();
+      } else {
+        caretBtn.click();
+      }
+      await new Promise((r) => setTimeout(r, 60));
+    }
+  } finally {
+    styleEl.remove();
+  }
+
+  return detected;
+}
+
+function refreshFirstTweetBadgeIfMatched() {
+  const handle = firstTweetBadgeState.authorHandle;
+  if (!handle || !authorFollowStatusMap.has(handle)) return;
+  const isFollowing = authorFollowStatusMap.get(handle);
+  firstTweetBadgeState.status = isFollowing ? "following" : "not_following";
+
+  const articles = document.querySelectorAll('article[data-testid="tweet"]');
+  for (const article of articles) {
+    if (article.closest('[role="dialog"]')) continue;
+    const baseTweet = extractSingleTweet(article);
+    if (!baseTweet) continue;
+    const h = X_AI_CAPTURE.handleFromAuthorText(baseTweet.author).toLowerCase();
+    if (h === handle) {
+      renderFirstTweetFollowBadge(article, firstTweetBadgeState.status, handle);
+      break;
+    }
+  }
+}
+
+function ensureFirstTweetFollowBadgeMarked(articlesList) {
+  const articles = Array.from(
+    articlesList || document.querySelectorAll('article[data-testid="tweet"]')
+  );
+  if (articles.length === 0) return;
+
+  // 找到页面上的第一条非广告正常推文
+  let firstArticle = null;
+  let firstBase = null;
+  let firstMetrics = null;
+
+  for (const art of articles) {
+    if (art.closest('[role="dialog"]')) continue;
+    const base = extractSingleTweet(art);
+    if (!base || !base.hasContent) continue;
+    const metrics = extractTweetMetrics(art);
+    if (metrics.isAd) continue;
+    firstArticle = art;
+    firstBase = base;
+    firstMetrics = metrics;
+    break;
+  }
+
+  if (!firstArticle || !firstBase) return;
+
+  const authorHandle = X_AI_CAPTURE.handleFromAuthorText(firstBase.author).toLowerCase();
+  if (!authorHandle) return;
+
+  const tweetKey = (firstMetrics && firstMetrics.tweetUrl) || firstBase.signature;
+  const currentPath = location.pathname;
+
+  // 若发生了页面路径切换，重置首帖检测状态
+  if (firstTweetBadgeState.pathname !== currentPath) {
+    firstTweetBadgeState.pathname = currentPath;
+    firstTweetBadgeState.tweetKey = tweetKey;
+    firstTweetBadgeState.authorHandle = authorHandle;
+    firstTweetBadgeState.status = "";
+    firstTweetBadgeState.probing = false;
+    firstTweetBadgeState.probeAttempts = 0;
+  }
+
+  // 如果已经拿到该作者的明确状态，直接渲染/补挂徽章
+  const myHandle = detectCurrentUserHandle();
+  if (myHandle && authorHandle === myHandle) {
+    firstTweetBadgeState.status = "self";
+    renderFirstTweetFollowBadge(firstArticle, "self", authorHandle);
+    return;
+  }
+
+  if (authorFollowStatusMap.has(authorHandle)) {
+    const isFollowing = authorFollowStatusMap.get(authorHandle);
+    firstTweetBadgeState.status = isFollowing ? "following" : "not_following";
+    renderFirstTweetFollowBadge(firstArticle, firstTweetBadgeState.status, authorHandle);
+    return;
+  }
+
+  // 若当前首帖已经完成过检测，只需确保 DOM 重绘后徽章不丢失
+  if (
+    firstTweetBadgeState.tweetKey === tweetKey &&
+    firstTweetBadgeState.status &&
+    firstTweetBadgeState.status !== "pending"
+  ) {
+    renderFirstTweetFollowBadge(firstArticle, firstTweetBadgeState.status, authorHandle);
+    return;
+  }
+
+  // 首次检测该首帖作者：先挂上“检测中”，等待 400ms 看 GraphQL 是否有数据，没有则静默探测菜单
+  if (firstTweetBadgeState.probing || firstTweetBadgeState.probeAttempts >= 2) return;
+
+  firstTweetBadgeState.tweetKey = tweetKey;
+  firstTweetBadgeState.authorHandle = authorHandle;
+  firstTweetBadgeState.status = "pending";
+  firstTweetBadgeState.probing = true;
+  firstTweetBadgeState.probeAttempts += 1;
+  renderFirstTweetFollowBadge(firstArticle, "pending", authorHandle);
+
+  setTimeout(async () => {
+    try {
+      if (authorFollowStatusMap.has(authorHandle)) {
+        const isFollowing = authorFollowStatusMap.get(authorHandle);
+        firstTweetBadgeState.status = isFollowing ? "following" : "not_following";
+        renderFirstTweetFollowBadge(firstArticle, firstTweetBadgeState.status, authorHandle);
+        return;
+      }
+
+      const probed = await silentProbeFollowStatusViaCaret(firstArticle, authorHandle);
+      if (typeof probed === "boolean") {
+        authorFollowStatusMap.set(authorHandle, probed);
+        firstTweetBadgeState.status = probed ? "following" : "not_following";
+        renderFirstTweetFollowBadge(firstArticle, firstTweetBadgeState.status, authorHandle);
+      } else {
+        firstTweetBadgeState.status = "unknown";
+        renderFirstTweetFollowBadge(firstArticle, "unknown", authorHandle);
+      }
+    } finally {
+      firstTweetBadgeState.probing = false;
+    }
+  }, 420);
 }
 
 // 入口1：在每条推文底部工具栏注入「🪄 仿写」/「🔥 爆款仿写」按钮
@@ -2163,6 +2475,10 @@ async function tryAutoFollowAuthor(article, authorHandle) {
   if (directFollowBtn && !directFollowBtn.getAttribute("data-testid")?.endsWith("-unfollow")) {
     directFollowBtn.click();
     await sleepInterruptible(500);
+    if (authorHandle) {
+      authorFollowStatusMap.set(authorHandle.toLowerCase(), true);
+      refreshFirstTweetBadgeIfMatched();
+    }
     return "followed";
   }
 
@@ -2205,6 +2521,10 @@ async function tryAutoFollowAuthor(article, authorHandle) {
   if (followItem) {
     followItem.click();
     await sleepInterruptible(550);
+    if (authorHandle) {
+      authorFollowStatusMap.set(authorHandle.toLowerCase(), true);
+      refreshFirstTweetBadgeIfMatched();
+    }
     return "followed";
   }
 
@@ -2220,6 +2540,10 @@ async function tryAutoFollowAuthor(article, authorHandle) {
     caretBtn.click();
   }
   await sleepInterruptible(300);
+  if (alreadyFollowing && authorHandle) {
+    authorFollowStatusMap.set(authorHandle.toLowerCase(), true);
+    refreshFirstTweetBadgeIfMatched();
+  }
   return alreadyFollowing ? "already" : "failed";
 }
 
